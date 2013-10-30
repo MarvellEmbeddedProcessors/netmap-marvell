@@ -42,8 +42,9 @@ const char *default_payload="netmap pkt-gen Luigi Rizzo and Matteo Landi\n"
 #include "nm_util.h"
 
 int verbose = 0;
+int dump;
 
-#define SKIP_PAYLOAD 1 /* do not check payload. */
+#define SKIP_PAYLOAD 1 /* check payload. */
 
 struct pkt {
 	struct ether_header eh;
@@ -83,7 +84,9 @@ struct glob_arg {
 #define OPT_MEMCPY	8
 #define OPT_TS		16	/* add a timestamp */
 	int use_pcap;
+#ifdef NOT_IN_USE
 	pcap_t *p;
+#endif
 };
 
 
@@ -359,17 +362,37 @@ initialize_packet(struct targ *targ)
 /* Check the payload of the packet for errors (use it for debug).
  * Look for consecutive ascii representations of the size of the packet.
  */
+
 static void
-check_payload(char *p, int psize)
+print_packet(char *p, int psize, int data_offs)
+{
+	int n_read;
+	static int counter = 1;
+
+	printf("\n-------- packet (%x) %d --------\n\n", (unsigned int)p, counter);
+	for (n_read = 0; n_read < psize; n_read++) {
+		printf("%02x ", p[n_read+data_offs]);
+
+		if (((n_read+1) % 16) == 0)
+			printf("\n");
+	}
+	counter++;
+	printf("\n");
+}
+
+static void
+check_payload(char *p, int psize, int data_offs)
 {
 	char temp[64];
 	int n_read, size, sizelen;
+
 
 	/* get the length in ASCII of the length of the packet. */
 	sizelen = sprintf(temp, "%d", psize) + 1; // include a whitespace
 
 	/* dummy payload. */
 	p += 14; /* skip packet header. */
+	p += data_offs;
 	n_read = 14;
 	while (psize - n_read >= sizelen) {
 		sscanf(p, "%d", &size);
@@ -423,6 +446,11 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 		slot->len = size;
 		if (sent == count - 1)
 			slot->flags |= NS_REPORT;
+
+		if (dump) {
+			print_packet(p, slot->len, slot->data_offs);
+			dump--;
+		}
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
 	ring->avail -= sent;
@@ -551,7 +579,8 @@ ponger_body(void *data)
 		D("can only reply ping with 1 thread");
 		return NULL;
 	}
-	D("understood ponger %d but don't know how to do it", n);
+	n = 10;
+	printf("understood ponger %d\n", n);
 	while (n == 0 || sent < n) {
 		uint32_t txcur, txavail;
 //#define BUSYWAIT
@@ -566,6 +595,7 @@ ponger_body(void *data)
 		txring = NETMAP_TXRING(nifp, 0);
 		txcur = txring->cur;
 		txavail = txring->avail;
+
 		/* see what we got back */
 		for (i = targ->qfirst; i < targ->qlast; i++) {
 			rxring = NETMAP_RXRING(nifp, i);
@@ -574,7 +604,6 @@ ponger_body(void *data)
 				struct netmap_slot *slot = &rxring->slot[cur];
 				char *src, *dst;
 				src = NETMAP_BUF(rxring, slot->buf_idx);
-				//D("got pkt %p of size %d", src, slot->len);
 				rxring->avail--;
 				rxring->cur = NETMAP_RING_NEXT(rxring, cur);
 				rx++;
@@ -585,7 +614,9 @@ ponger_body(void *data)
 				/* copy... */
 				pkt_copy(src, dst, slot->len);
 				txring->slot[txcur].len = slot->len;
+				txring->slot[txcur].data_offs = 2;
 				/* XXX swap src dst mac */
+				printf("send answer\n");
 				txcur = NETMAP_RING_NEXT(txring, txcur);
 				txavail--;
 				sent++;
@@ -597,7 +628,7 @@ ponger_body(void *data)
 #ifdef BUSYWAIT
 		ioctl(fds[0].fd, NIOCTXSYNC, NULL);
 #endif
-		//D("tx %d rx %d", sent, rx);
+		printf("tx %d rx %d\n", sent, rx);
 	}
 	return NULL;
 }
@@ -614,6 +645,9 @@ sender_body(void *data)
 	int i, n = targ->g->npackets / targ->g->nthreads, sent = 0;
 	int options = targ->g->options | OPT_COPY;
 D("start");
+
+	printf("\nnetmap_if = %x.", (unsigned int)(nifp));
+
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
 	/* setup poll(2) mechanism. */
@@ -624,9 +658,11 @@ D("start");
 	/* main loop.*/
 	gettimeofday(&targ->tic, NULL);
     if (targ->g->use_pcap) {
-	int size = targ->g->pkt_size;
-	void *pkt = &targ->pkt;
-	pcap_t *p = targ->g->p;
+		printf("do not use pcap\n");
+#ifdef NOT_IN_USE
+		int size = targ->g->pkt_size;
+		void *pkt = &targ->pkt;
+		pcap_t *p = targ->g->p;
 
 	for (i = 0; n == 0 || sent < n; i++) {
 		if (pcap_inject(p, pkt, size) != -1)
@@ -636,6 +672,7 @@ D("start");
 			i = 0;
 		}
 	}
+#endif
     } else {
 	while (n == 0 || sent < n) {
 
@@ -658,6 +695,7 @@ D("start");
 			if (n > 0 && n - sent < limit)
 				limit = n - sent;
 			txring = NETMAP_TXRING(nifp, i);
+
 			if (txring->avail == 0)
 				continue;
 			m = send_packets(txring, &targ->pkt, targ->g->pkt_size,
@@ -690,7 +728,7 @@ quit:
 	return (NULL);
 }
 
-
+#ifdef NOT_IN_USE
 static void
 receive_pcap(u_char *user, const struct pcap_pkthdr * h,
 	const u_char * bytes)
@@ -700,6 +738,7 @@ receive_pcap(u_char *user, const struct pcap_pkthdr * h,
 	(void)bytes;	/* UNUSED */
 	(*count)++;
 }
+#endif
 
 static int
 receive_packets(struct netmap_ring *ring, u_int limit, int skip_payload)
@@ -710,12 +749,17 @@ receive_packets(struct netmap_ring *ring, u_int limit, int skip_payload)
 	if (ring->avail < limit)
 		limit = ring->avail;
 	for (rx = 0; rx < limit; rx++) {
+
 		struct netmap_slot *slot = &ring->slot[cur];
 		char *p = NETMAP_BUF(ring, slot->buf_idx);
 
 		if (!skip_payload)
-			check_payload(p, slot->len);
+			check_payload(p, slot->len, slot->data_offs);
 
+		if (dump) {
+			print_packet(p, slot->len, slot->data_offs);
+			dump--;
+		}
 		cur = NETMAP_RING_NEXT(ring, cur);
 	}
 	ring->avail -= rx;
@@ -751,11 +795,15 @@ receiver_body(void *data)
 
 	/* main loop, exit after 1s silence */
 	gettimeofday(&targ->tic, NULL);
+
     if (targ->g->use_pcap) {
+	printf("do not use pcap\n");
+#ifdef NOT_IN_USE
 	for (;;) {
 		/* XXX should we poll ? */
 		pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap, NULL);
 	}
+#endif
     } else {
 	while (1) {
 		/* Once we started to receive packets, wait at most 1 seconds
@@ -782,7 +830,7 @@ receiver_body(void *data)
 		// tell the card we have read the data
 		//ioctl(fds[0].fd, NIOCRXSYNC, NULL);
 	}
-    }
+	}
 
 	targ->completed = 1;
 	targ->count = received;
@@ -858,6 +906,7 @@ usage(void)
 		"\t-p threads		processes/threads to use\n"
 		"\t-T report_ms		milliseconds between reports\n"
 		"\t-w wait_for_link_time	in seconds\n"
+		"\t-m count         print first count packets\n"
 		"",
 		cmd);
 
@@ -881,8 +930,9 @@ int
 main(int arc, char **argv)
 {
 	int i, fd;
+#ifdef NOT_IN_USE
 	char pcap_errbuf[PCAP_ERRBUF_SIZE];
-
+#endif
 	struct glob_arg g;
 
 	struct nmreq nmr;
@@ -896,10 +946,11 @@ main(int arc, char **argv)
 	int affinity = -1;
 
 	bzero(&g, sizeof(g));
+	dump = 0;
 
 	/* ip addresses can also be a range x.x.x.x-x.x.x.y */
-	g.src_ip.name = "10.0.0.1";
-	g.dst_ip.name = "10.1.0.1";
+	g.src_ip.name = "192.168.2.1";
+	g.dst_ip.name = "192.168.2.10";
 	g.dst_mac.name = "ff:ff:ff:ff:ff:ff";
 	g.src_mac.name = NULL;
 	g.pkt_size = 60;
@@ -908,9 +959,8 @@ main(int arc, char **argv)
 	g.cpus = 1;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:n:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
+			"a:f:n:m:i:t:r:l:d:s:D:S:b:c:o:p:PT:w:v")) != -1) {
 		struct sf *fn;
-
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -919,7 +969,9 @@ main(int arc, char **argv)
 		case 'n':
 			g.npackets = atoi(optarg);
 			break;
-
+		case 'm':
+			dump = atoi(optarg);
+			break;
 		case 'f':
 			for (fn = func; fn->key; fn++) {
 				if (!strcmp(fn->key, optarg))
@@ -1022,12 +1074,15 @@ main(int arc, char **argv)
 	extract_mac_range(&g.dst_mac);
 
     if (g.use_pcap) {
+	printf("do not use pcap\n");
+#ifdef NOT_IN_USE
 	D("using pcap on %s", ifname);
 	g.p = pcap_open_live(ifname, 0, 1, 100, pcap_errbuf);
 	if (g.p == NULL) {
 		D("cannot open pcap on %s", ifname);
 		usage();
 	}
+#endif
 	mmap_addr = NULL;
 	fd = -1;
     } else {
@@ -1059,6 +1114,8 @@ main(int arc, char **argv)
 			D("Unable to get if info for %s", ifname);
 		}
 		devqueues = nmr.nr_rx_rings;
+		printf("NIOCGINFO :: nr_tx_slots = %d, nr_rx_slots = %d, nr_tx_rings = %d, nr_rx_rings = %d",
+		nmr.nr_tx_slots, nmr.nr_rx_slots, nmr.nr_tx_rings, nmr.nr_rx_rings);
 	}
 
 	/* validate provided nthreads. */
@@ -1094,7 +1151,10 @@ main(int arc, char **argv)
 		D("Unable to register interface %s", ifname);
 		//continue, fail later
 	}
+	printf("\nNIOCREGIF :: nr_tx_slots = %d, nr_rx_slots = %d, nr_tx_rings = %d, nr_rx_rings = %d",
+		nmr.nr_tx_slots, nmr.nr_rx_slots, nmr.nr_tx_rings, nmr.nr_rx_rings);
 
+	printf("\n\n");
 
 	/* Print some debug information. */
 	fprintf(stdout,
@@ -1115,7 +1175,7 @@ main(int arc, char **argv)
 		D("aborting");
 		usage();
 	}
-    }
+	}
 
 	if (g.options) {
 		D("special options:%s%s%s%s\n",
@@ -1134,12 +1194,15 @@ main(int arc, char **argv)
 	signal(SIGINT, sigint_h);
 
 	if (g.use_pcap) {
+		printf("do not use pcap\n");
+#ifdef NOT_IN_USE
 		g.p = pcap_open_live(ifname, 0, 1, 100, NULL);
 		if (g.p == NULL) {
 			D("cannot open pcap on %s", ifname);
 			usage();
 		} else
 			D("using pcap %p on %s", g.p, ifname);
+#endif
 	}
 
 	targs = calloc(g.nthreads, sizeof(*targs));
@@ -1219,6 +1282,7 @@ main(int arc, char **argv)
 	struct timeval tic, toc;
 
 	gettimeofday(&toc, NULL);
+
 	for (;;) {
 		struct timeval now, delta;
 		uint64_t pps;

@@ -126,6 +126,8 @@ struct netmap_slot {
 	uint32_t buf_idx; /* buffer index */
 	uint16_t len;	/* packet length, to be copied to/from the hw ring */
 	uint16_t flags;	/* buf changed, etc. */
+	uint16_t data_offs; /* offset to data start point in the buffer- marvell*/
+	uint16_t reserved;  /* marvell */
 #define	NS_BUF_CHANGED	0x0001	/* must resync the map, buffer changed */
 #define	NS_REPORT	0x0002	/* ask the hardware to report results
 				 * e.g. by generating an interrupt

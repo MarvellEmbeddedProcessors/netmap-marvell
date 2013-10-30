@@ -143,6 +143,7 @@ netmap_open(struct my_ring *me, int ringid)
 			me->ifname, errno, req.nr_version);
 		goto error;
 	}
+
 	me->memsize = l = req.nr_memsize;
 	if (verbose)
 		D("memsize is %d MB", l>>20);
@@ -207,6 +208,7 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 	      u_int limit, const char *msg)
 {
 	u_int j, k, m = 0;
+	msg = msg; /*avoid comilation error*/
 
 	/* print a warning if any of the ring flags is set (e.g. NM_REINIT) */
 	if (rxring->flags || txring->flags)
@@ -235,11 +237,14 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 		rs->buf_idx = pkt;
 
 		/* copy the packet length. */
-		if (rs->len < 14 || rs->len > 2048)
+		if (rs->len < 14 || rs->len > 2048) {
 			D("wrong len %d rx[%d] -> tx[%d]", rs->len, j, k);
-		else if (verbose > 1)
-			D("send len %d rx[%d] -> tx[%d]", rs->len, j, k);
+		} else {
+			if (verbose > 1)
+				D("send len %d rx[%d] -> tx[%d]", rs->len, j, k);
+		}
 		ts->len = rs->len;
+		ts->data_offs = rs->data_offs;
 
 		/* report the buffer change. */
 		ts->flags |= NS_BUF_CHANGED;
@@ -333,7 +338,6 @@ main(int argc, char **argv)
 
 	fprintf(stderr, "%s %s built %s %s\n",
 		argv[0], version, __DATE__, __TIME__);
-
 	bzero(me, sizeof(me));
 
 	while ( (ch = getopt(argc, argv, "b:i:vw:")) != -1) {
@@ -397,11 +401,15 @@ main(int argc, char **argv)
 		/* two different interfaces. Take all rings on if1 */
 		i = 0;	// all hw rings
 	}
+
 	if (netmap_open(me, i, 1))
 		return (1);
+
 	me[1].mem = me[0].mem; /* copy the pointer, so only one mmap */
 	if (netmap_open(me+1, 0, 1))
 		return (1);
+
+	sleep(10);
 
 #if 0 // XXX done in open
 	/* if bridging two interfaces, set promisc mode */
