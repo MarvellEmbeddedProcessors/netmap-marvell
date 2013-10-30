@@ -644,7 +644,8 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 		 */
 		ring->avail = kring->nr_hwavail = ndesc - 1;
 		ring->cur = kring->nr_hwcur = 0;
-		*(int *)(uintptr_t)&ring->nr_buf_size = NETMAP_BUF_SIZE;
+		ring->flags = 0;
+		*(uint16_t *)(uintptr_t)&ring->nr_buf_size = NETMAP_BUF_SIZE;
 		ND("initializing slots for txring[%d]", i);
 		netmap_new_bufs(nifp, ring->slot, ndesc);
 	}
@@ -672,7 +673,8 @@ netmap_if_new(const char *ifname, struct netmap_adapter *na)
 
 		ring->cur = kring->nr_hwcur = 0;
 		ring->avail = kring->nr_hwavail = 0; /* empty */
-		*(int *)(uintptr_t)&ring->nr_buf_size = NETMAP_BUF_SIZE;
+		ring->flags = 0;
+		*(uint16_t *)(uintptr_t)&ring->nr_buf_size = NETMAP_BUF_SIZE;
 		ND("initializing slots for rxring[%d]", i);
 		netmap_new_bufs(nifp, ring->slot, ndesc);
 	}
