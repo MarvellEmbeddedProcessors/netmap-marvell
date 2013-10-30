@@ -78,10 +78,11 @@
 
 #include <net/netmap.h>
 #include <net/netmap_user.h>
+/*
 #ifndef MY_PCAP
 #include <pcap/pcap.h> // XXX do we need it ?
 #endif // XXX hack
-
+*/
 #include <pthread.h>	/* pthread_* */
 
 #if defined(__FreeBSD__)
@@ -106,21 +107,35 @@ static inline int min(int a, int b) { return a < b ? a : b; }
 
 /* debug support */
 #define ND(format, ...)	do {} while(0)
+//#define NM_DEBUG
+#ifdef NM_DEBUG
 #define D(format, ...)				\
 	fprintf(stderr, "%s [%d] " format "\n", 	\
 	__FUNCTION__, __LINE__, ##__VA_ARGS__)
+#else
+#define D(format, ...)	{}	
+#endif
 
 #ifndef EXPERIMENTAL
 #define EXPERIMENTAL 0
 #endif
 
-
-// XXX does it work on 32-bit machines ?
-static inline void prefetch (const void *x)
+static inline void prefetch(const void *ptr)
 {
-        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
+        __asm__ __volatile__(
+                "pld\t%a0"
+                :
+                : "p" (ptr)
+                : "cc");
 }
 
+// XXX does it work on 32-bit machines ?
+/*
+static inline void prefetch (const void *x)
+{
+        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x)); 
+}
+*/
 // XXX only for multiples of 64 bytes, non overlapped.
 static inline void
 pkt_copy(const void *_src, void *_dst, int l)

@@ -158,17 +158,17 @@ netmap_open(struct my_ring *me, int ringid, int promisc)
 	/* Set the operating mode. */
 	if (ringid != NETMAP_SW_RING) {
 		nm_do_ioctl(me, SIOCGIFFLAGS, 0);
-		if ((me[0].if_flags & IFF_UP) == 0) {
+		if ((me->if_flags & IFF_UP) == 0) {
 			D("%s is down, bringing up...", me[0].ifname);
-			me[0].if_flags |= IFF_UP;
+			me->if_flags |= IFF_UP;
 		}
 		if (promisc) {
-			me[0].if_flags |= IFF_PPROMISC;
+			me->if_flags |= IFF_PPROMISC;
 			nm_do_ioctl(me, SIOCSIFFLAGS, 0);
 
-			nm_do_ioctl(me+1, SIOCGIFFLAGS, 0);
+			/*nm_do_ioctl(me+1, SIOCGIFFLAGS, 0);
 			me[1].if_flags |= IFF_PPROMISC;
-			nm_do_ioctl(me+1, SIOCSIFFLAGS, 0);
+			nm_do_ioctl(me+1, SIOCSIFFLAGS, 0);*/
 		}
 
 #ifdef __FreeBSD__
