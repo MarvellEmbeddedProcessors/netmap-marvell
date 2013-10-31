@@ -17,7 +17,9 @@ CONFIG_IGB:=m
 netmap_lin-objs := netmap.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
+ifndef DRV_NAME
 obj-m += $(DRIVERS)
+endif
 # obj-$(CONFIG_R8169) += r8169.o
 # obj-$(CONFIG_FORCEDETH) += forcedeth.o
 # obj-$(CONFIG_E1000) += e1000/
@@ -30,6 +32,7 @@ obj-m += $(DRIVERS)
 # can be in $(KSRC)/source/drivers/net/ethernet/$(manufacturer)
 DRIVER_SRCS = r8169.c forcedeth.c e1000/ e1000e/ ixgbe/ igb/
 DRIVER_SUBDIRS= nvidia realtek intel
+MV_DRIVER_SRCS = $(KSRC)/arch/arm/plat-armada/mv_drivers_lsp/$(DRV_NAME)
 
 # The following commands are needed to build the modules as out-of-tree, in
 # fact the kernel sources path must be specified.
@@ -58,6 +61,13 @@ DRIVERS := $(shell \
 
 all:	get-drivers build
 
+build_nm:
+	make -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
+		EXTRA_CFLAGS='$(EXTRA_CFLAGS)'
+	@cp -f Module.symvers $(MV_DRIVER_SRCS)
+	make -C $(KSRC) M=$(MV_DRIVER_SRCS) NETMAP=y NETMAP_DIR=$(PWD) modules ; mv $(MV_DRIVER_SRCS)/*.ko $(PWD);
+	@ls -l `find . -name \*.ko`
+
 build:
 	make -C $(KSRC) M=$(PWD) CONFIG_NETMAP=m	\
 		CONFIG_E1000=m CONFIG_E1000E=m \
@@ -72,6 +82,7 @@ test:
 
 clean:
 	-@ make -C $(KSRC) M=$(PWD) clean
+	@ make -C $(KSRC) M=$(MV_DRIVER_SRCS) clean
 	-@ (rm -rf $(DRIVER_SRCS) *.orig *.rej *.ko *.o get-drivers )
 
 # the source is not here so we need to specify a dependency
