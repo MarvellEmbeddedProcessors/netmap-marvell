@@ -14,6 +14,7 @@ CONFIG_E1000E:=m
 CONFIG_IXGBE:=m
 CONFIG_IGB:=m
 
+
 netmap_lin-objs := netmap.o
 
 obj-$(CONFIG_NETMAP) = netmap_lin.o
