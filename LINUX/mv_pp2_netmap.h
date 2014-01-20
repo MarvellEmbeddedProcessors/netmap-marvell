@@ -192,7 +192,7 @@ mv_pp2_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			tx_desc->dataSize = len;
 			tx_desc->pktOffset = slot->data_offs;
 			tx_desc->command = PP2_TX_L4_CSUM_NOT | PP2_TX_F_DESC_MASK | PP2_TX_L_DESC_MASK;
-
+			mv_eth_tx_desc_flush(tx_desc);
 			aggr_txq_ctrl->txq_count++;
 
 			if (slot->flags & NS_BUF_CHANGED)
@@ -258,7 +258,6 @@ mv_pp2_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 	if (k > lim)
 		return netmap_ring_reinit(kring);
 
-
 	if (do_lock)
 		mtx_lock(&kring->q_lock);
 
@@ -280,6 +279,10 @@ mv_pp2_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 		rx_done = (rx_done >= lim) ? lim - 1 : rx_done;
 		for (n = 0; n < rx_done; n++) {
 			PP2_RX_DESC *curr = (PP2_RX_DESC *)MV_PP2_QUEUE_DESC_PTR(&rxr->queueCtrl, l);
+
+#if defined(MV_CPU_BE)
+			mvPPv2RxqDescSwap(curr);
+#endif /* MV_CPU_BE */
 
 			/* TBD : check for ERRORs */
 			ring->slot[j].len = (curr->dataSize) - strip_crc - MV_ETH_MH_SIZE;
@@ -323,10 +326,16 @@ mv_pp2_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
 			uint64_t paddr;
 			uint32_t *addr = PNMB(slot, &paddr);
 
+			/*
+			In big endian mode:
+			we do not need to swap descriptor here, allready swapped before
+			*/
+
 			slot->data_offs = NET_SKB_PAD + MV_ETH_MH_SIZE;
 			if (addr == (uint32_t *)netmap_buffer_base) { /* bad buf */
 				if (do_lock)
 					mtx_unlock(&kring->q_lock);
+
 				return netmap_ring_reinit(kring);
 			}
 			if (slot->flags & NS_BUF_CHANGED) {
@@ -386,7 +395,7 @@ static int pp2_netmap_rxq_init_buffers(struct SOFTC_T *adapter, int rxq)
 	/* initialize the rx ring */
 	slot = netmap_reset(na, NR_RX, rxq, 0);
 	if (!slot) {
-		printk(KERN_ERR "%s: TX slot is null\n", __func__);
+		printk(KERN_ERR "%s: RX slot is null\n", __func__);
 		return 1;
 	}
 	rxr = &(adapter->rxq_ctrl[rxq]);
@@ -394,7 +403,7 @@ static int pp2_netmap_rxq_init_buffers(struct SOFTC_T *adapter, int rxq)
 	for (i = 0; i < rxr->rxq_size; i++) {
 		si = netmap_idx_n2k(&na->rx_rings[rxq], i);
 		vaddr = PNMB(slot + si, &paddr);
-		mvBmPoolPut(adapter->pool_long->pool, (uint32_t)paddr, (MV_U32)((slot+si)->buf_idx));
+		mvBmPoolPut(adapter->pool_long->pool, (uint32_t)paddr, (uint32_t)((slot+si)->buf_idx));
 	}
 	rxr->q->queueCtrl.nextToProc = 0;
 	/* Force memory writes to complete */
