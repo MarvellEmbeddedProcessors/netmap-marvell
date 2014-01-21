@@ -443,7 +443,10 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt,
 			memcpy(p, pkt, size);
 		else if (options & OPT_PREFETCH)
 			prefetch(p);
+
 		slot->len = size;
+		slot->data_offs = 0;
+
 		if (sent == count - 1)
 			slot->flags |= NS_REPORT;
 
