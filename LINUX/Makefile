@@ -67,4 +67,4 @@ $(obj)/netmap.o: $(M)/../sys/dev/netmap/netmap.c
 	$(call cmd,modversions)
 
 apps:
-	(cd ../examples; make)
+	(cd ../examples; make KSRC=$(KSRC) pkt-gen; make KSRC=$(KSRC) bridge)

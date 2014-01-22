@@ -31,7 +31,7 @@ disclaimer.
 
 #include <bsd_glue.h>
 #include <net/netmap.h>
-#include <netmap/netmap_kern.h>
+#include <dev/netmap/netmap_kern.h>
 
 #define SOFTC_T	eth_port
 
