@@ -36,7 +36,7 @@ disclaimer.
 #define SOFTC_T	eth_port
 
 static int pool_buf_num[MV_BM_POOLS];
-
+static struct bm_pool *pool_short[MV_ETH_MAX_PORTS];
 /*
  * Register/unregister
  *	adapter is pointer to eth_port
@@ -70,7 +70,6 @@ static int mv_pp2_netmap_reg(struct ifnet *ifp, int onoff)
 		ifp->if_capenable |= IFCAP_NETMAP;
 		na->if_transmit = (void *)ifp->netdev_ops;
 		ifp->netdev_ops = &na->nm_ndo;
-		set_bit(MV_ETH_F_IFCAP_NETMAP_BIT, &(adapter->flags));
 
 		/* check that long pool is not shared with other ports */
 		port_map =  mv_eth_ctrl_pool_port_map_get(adapter->pool_long->pool);
@@ -88,6 +87,12 @@ static int mv_pp2_netmap_reg(struct ifnet *ifp, int onoff)
 		for (rxq = 0; rxq < CONFIG_MV_ETH_RXQ; rxq++)
 			mvPp2RxqBmShortPoolSet(adapter->port, rxq, adapter->pool_long->pool);
 
+		/* update short pool in software */
+		pool_short[adapter->port] = adapter->pool_short;
+		adapter->pool_short = adapter->pool_long;
+
+		set_bit(MV_ETH_F_IFCAP_NETMAP_BIT, &(adapter->flags));
+
 	} else {
 		unsigned long flags = 0;
 		u_int pa, i;
@@ -101,8 +106,6 @@ static int mv_pp2_netmap_reg(struct ifnet *ifp, int onoff)
 		for (txq = 0; txq < CONFIG_MV_ETH_TXQ; txq++)
 			mvPp2TxqSentDescProc(adapter->port, 0, txq);
 		*/
-
-		clear_bit(MV_ETH_F_IFCAP_NETMAP_BIT, &(adapter->flags));
 
 		i = 0;
 		MV_ETH_LOCK(&adapter->pool_long->lock, flags);
@@ -118,9 +121,13 @@ static int mv_pp2_netmap_reg(struct ifnet *ifp, int onoff)
 		/* set port's short pool for Linux driver */
 		for (rxq = 0; rxq < CONFIG_MV_ETH_RXQ; rxq++)
 			mvPp2RxqBmShortPoolSet(adapter->port, rxq, adapter->pool_short->pool);
+
+		/* update short pool in software */
+		adapter->pool_short = pool_short[adapter->port];
+
+		clear_bit(MV_ETH_F_IFCAP_NETMAP_BIT, &(adapter->flags));
 	}
 
-	/*rtnl_unlock();  XXX do we need it ? */
 	if (mv_eth_start(ifp)) {
 		printk(KERN_ERR "%s: start interface failed\n", ifp->name);
 		return -EINVAL;
@@ -403,7 +410,12 @@ static int pp2_netmap_rxq_init_buffers(struct SOFTC_T *adapter, int rxq)
 	for (i = 0; i < rxr->rxq_size; i++) {
 		si = netmap_idx_n2k(&na->rx_rings[rxq], i);
 		vaddr = PNMB(slot + si, &paddr);
+		/* printk(KERN_ERR "paddr = 0x%x, virt = 0x%x\n",
+				(uint32_t)paddr,  (uint32_t)((slot+si)->buf_idx));*/
+
+		/* TODO: use mvBmPoolQsetPut in ppv2.1 */
 		mvBmPoolPut(adapter->pool_long->pool, (uint32_t)paddr, (uint32_t)((slot+si)->buf_idx));
+
 	}
 	rxr->q->queueCtrl.nextToProc = 0;
 	/* Force memory writes to complete */
