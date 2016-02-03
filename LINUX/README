@@ -20,7 +20,7 @@ and some test applications.
 
 This version supports r8169, ixgbe, igb, e1000, e1000e and forcedeth.
 
-Netmap relies on a kernel module (netmap_lin.ko) and slightly modified
+Netmap relies on a kernel module (netmap.ko) and slightly modified
 device drivers. Userspace programs can use the native API (documented
 in netmap.4) or a libpcap emulation library.
 
@@ -39,11 +39,14 @@ HOW TO BUILD THE CODE
 1. make sure you have kernel sources/headers matching your installed system
 
 2. do the following
-	make clean; make KSRC=/usr/src/linux-kernel-source-or-headers
-   this produces ./netmap_lin.ko and other kernel modules.
+	./configure
+	make
+   this produces ./netmap.ko and other kernel modules.
+   (If your kernel sources are not in standard places, follow the
+    instructions in the errors output by ./configure)
 
 3. to build sample applications, run
-	(cd ../examples; make )
+	make apps
    (you will need the pthreads and libpcap-dev packages to build them)
 
 If you want support for additional drivers please have a look at
@@ -69,7 +72,7 @@ TinyCore image, the following steps can be used for initial testing:
 	...
 
 2. load netmap and device driver module
-	sudo insmod ./netmap_lin.ko
+	sudo insmod ./netmap.ko
 	sudo insmod ./ixgbe/ixgbe.ko
 	sudo insmod ./e1000/e1000.ko
 	...
@@ -136,3 +139,19 @@ REVISION HISTORY
 20120217 - initial version. Only ixgbe, e1000 and e1000e are working.
 	Other drivers (igb, r8169, forcedeth) are supplied only as a
 	proof of concept.
+
+DETAILS
+--------
++ igb: on linux 3.2 and above the igb driver moved to split buffers,
+  and netmap was not updated until end of june 2013.
+  Symptoms were inability to receive short packets.
+
++ there are reports of ixgbe and igb unable to read packets.
+  We are unable to reproduce the problem.
+  - Ubuntu 12.04 LTS 3.5.0-25-generic. igb read problems ?
+  - 3.2.0-32-generic with 82598 not working
+
++ if_e1000_e uses regular descriptor up 3.1 at least
+  3.2.32 is reported to use extended descriptors
+	(in my repo updated at -r 11975)
+	

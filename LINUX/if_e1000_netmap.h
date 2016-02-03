@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Gaetano Catalli, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2012-2014 Gaetano Catalli, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,11 +23,10 @@
  * SUCH DAMAGE.
  */
 
-
 /*
  * $Id: if_e1000_netmap.h 10878 2012-04-12 22:28:48Z luigi $
  *
- * netmap support for e1000 (lem)
+ * netmap support for: e1000 (linux version)
  * For details on netmap support please see ixgbe_netmap.h
  */
 
@@ -35,145 +34,145 @@
 #include <bsd_glue.h>
 #include <net/netmap.h>
 #include <netmap/netmap_kern.h>
+#include <netmap/netmap_virt.h>
+
 #define SOFTC_T	e1000_adapter
 
+#define e1000_driver_name netmap_e1000_driver_name
+char netmap_e1000_driver_name[] = "e1000" NETMAP_LINUX_DRIVER_SUFFIX;
 
 /*
- * Register/unregister, similar to e1000_reinit_safe()
+ * Register/unregister. We are already under netmap lock.
  */
 static int
-e1000_netmap_reg(struct ifnet *ifp, int onoff)
+e1000_netmap_reg(struct netmap_adapter *na, int onoff)
 {
+	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
-	int error = 0;
 
-	if (na == NULL)
-		return EINVAL;
-
-	if (!(ifp->flags & IFF_UP)) {
-		/* e1000_open has not been called yet, so resources
-		 * are not allocated */
-		D("Interface is down!");
-		return EINVAL;
-	}
-
+	/* protect against other reinit */
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->flags))
-		msleep(1);
+		usleep_range(1000, 2000);
 
-	//rtnl_lock(); // XXX do we need it ?
-	e1000_down(adapter);
+	if (netif_running(adapter->netdev))
+		e1000_down(adapter);
 
-	if (onoff) { /* enable netmap mode */
-		ifp->if_capenable |= IFCAP_NETMAP;
-		na->if_transmit = (void *)ifp->netdev_ops;
-		ifp->netdev_ops = &na->nm_ndo;
+	/* enable or disable flags and callbacks in na and ifp */
+	if (onoff) {
+		nm_set_native_flags(na);
 	} else {
-		ifp->if_capenable &= ~IFCAP_NETMAP;
-		ifp->netdev_ops = (void *)na->if_transmit;
+		nm_clear_native_flags(na);
 	}
+	if (netif_running(adapter->netdev))
+		e1000_up(adapter);
+	else
+		e1000_reset(adapter);
 
-	e1000_up(adapter);
-	//rtnl_unlock(); // XXX do we need it ?
 	clear_bit(__E1000_RESETTING, &adapter->flags);
-	return (error);
+	return (0);
 }
 
+static void e1000_irq_enable(struct e1000_adapter *adapter);
+static void e1000_irq_disable(struct e1000_adapter *adapter);
+static void
+e1000_netmap_intr(struct netmap_adapter *na, int onoff)
+{
+	struct ifnet *ifp = na->ifp;
+	struct SOFTC_T *adapter = netdev_priv(ifp);
+
+	if (onoff)
+		e1000_irq_enable(adapter);
+	else
+		e1000_irq_disable(adapter);
+}
 
 /*
  * Reconcile kernel and user view of the transmit ring.
  */
 static int
-e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+e1000_netmap_txsync(struct netmap_kring *kring, int flags)
 {
+	struct netmap_adapter *na = kring->na;
+	struct ifnet *ifp = na->ifp;
+	struct netmap_ring *ring = kring->ring;
+	u_int ring_nr = kring->ring_id;
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const head = kring->rhead;
+	/* generate an interrupt approximately every half ring */
+	u_int report_frequency = kring->nkr_num_slots >> 1;
+
+	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct e1000_tx_ring* txr = &adapter->tx_ring[ring_nr];
-	struct netmap_adapter *na = NA(ifp);
-	struct netmap_kring *kring = &na->tx_rings[ring_nr];
-	struct netmap_ring *ring = kring->ring;
-	u_int j, k, l, n = 0, lim = kring->nkr_num_slots - 1;
 
-	/* generate an interrupt approximately every half ring */
-	int report_frequency = kring->nkr_num_slots >> 1;
-
-	/* take a copy of ring->cur now, and never read it again */
-	k = ring->cur;
-	if (k > lim)
-		return netmap_ring_reinit(kring);
-
-	if (do_lock)
-		mtx_lock(&kring->q_lock);
 	rmb();
 	/*
-	 * Process new packets to send. j is the current index in the
-	 * netmap ring, l is the corresponding index in the NIC ring.
+	 * First part: process new packets to send.
 	 */
-	j = kring->nr_hwcur;
-	if (j != k) {	/* we have new packets to send */
-		l = netmap_idx_k2n(kring, j);
-		for (n = 0; j != k; n++) {
-			/* slot is the current slot in the netmap ring */
-			struct netmap_slot *slot = &ring->slot[j];
-			/* curr is the current slot in the nic ring */
-			struct e1000_tx_desc *curr = E1000_TX_DESC(*txr, l);
-			int flags = ((slot->flags & NS_REPORT) ||
-				j == 0 || j == report_frequency) ?
-					E1000_TXD_CMD_RS : 0;
-			uint64_t paddr;
-			void *addr = PNMB(slot, &paddr);
+
+	if (!netif_carrier_ok(ifp)) {
+		goto out;
+	}
+
+	nm_i = kring->nr_hwcur;
+	if (nm_i != head) {	/* we have new packets to send */
+		nic_i = netmap_idx_k2n(kring, nm_i);
+		for (n = 0; nm_i != head; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
+			uint64_t paddr;
+			void *addr = PNMB(na, slot, &paddr);
 
-			if (addr == netmap_buffer_base || len > NETMAP_BUF_SIZE) {
-				if (do_lock)
-					mtx_unlock(&kring->q_lock);
-				return netmap_ring_reinit(kring);
-			}
+			/* device-specific */
+			struct e1000_tx_desc *curr = E1000_TX_DESC(*txr, nic_i);
+			int flags = (slot->flags & NS_REPORT ||
+				nic_i == 0 || nic_i == report_frequency) ?
+				E1000_TXD_CMD_RS : 0;
 
-			slot->flags &= ~NS_REPORT;
+			NM_CHECK_ADDR_LEN(na, addr, len);
+
 			if (slot->flags & NS_BUF_CHANGED) {
+				/* buffer has changed, reload map */
 				// netmap_reload_map(pdev, DMA_TO_DEVICE, old_addr, paddr);
 				curr->buffer_addr = htole64(paddr);
-				slot->flags &= ~NS_BUF_CHANGED;
 			}
+			slot->flags &= ~(NS_REPORT | NS_BUF_CHANGED);
+
+			/* Fill the slot in the NIC ring. */
 			curr->upper.data = 0;
-			curr->lower.data = htole32(adapter->txd_cmd | len |
-					(E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS | flags) );
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			curr->lower.data = htole32(adapter->txd_cmd |
+				len | flags |
+				E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS);
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
-		kring->nr_hwcur = k; /* the saved ring->cur */
-		kring->nr_hwavail -= n;
+		kring->nr_hwcur = head;
 
-		wmb(); /* synchronize writes to the NIC ring */
-
-		txr->next_to_use = l;
-		writel(l, adapter->hw.hw_addr + txr->tdt);
+		wmb();	/* synchronize writes to the NIC ring */
+		txr->next_to_use = nic_i; /* XXX what for ? */
+		/* (re)start the tx unit up to slot nic_i (excluded) */
+		writel(nic_i, adapter->hw.hw_addr + txr->tdt);
 		mmiowb(); // XXX where do we need this ?
 	}
 
-	if (n == 0 || kring->nr_hwavail < 1) {
-		int delta;
-
+	/*
+	 * Second part: reclaim buffers for completed transmissions.
+	 */
+	if (flags & NAF_FORCE_RECLAIM || nm_kr_txempty(kring)) {
 		/* record completed transmissions using TDH */
-		l = readl(adapter->hw.hw_addr + txr->tdh);
-		if (l >= kring->nkr_num_slots) { /* XXX can happen */
-			D("TDH wrap %d", l);
-			l -= kring->nkr_num_slots;
+		nic_i = readl(adapter->hw.hw_addr + txr->tdh);
+		if (nic_i >= kring->nkr_num_slots) { /* XXX can it happen ? */
+			D("TDH wrap %d", nic_i);
+			nic_i -= kring->nkr_num_slots;
 		}
-		delta = l - txr->next_to_clean;
-		if (delta) {
-			/* some tx completed, increment hwavail. */
-			if (delta < 0)
-				delta += kring->nkr_num_slots;
-			txr->next_to_clean = l;
-			kring->nr_hwavail += delta;
-		}
+		txr->next_to_clean = nic_i;
+		kring->nr_hwtail = nm_prev(netmap_idx_n2k(kring, nic_i), lim);
 	}
-	/* update avail to what the kernel knows */
-	ring->avail = kring->nr_hwavail;
+out:
 
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return 0;
 }
 
@@ -182,95 +181,98 @@ e1000_netmap_txsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
  * Reconcile kernel and user view of the receive ring.
  */
 static int
-e1000_netmap_rxsync(struct ifnet *ifp, u_int ring_nr, int do_lock)
+e1000_netmap_rxsync(struct netmap_kring *kring, int flags)
 {
-	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct netmap_adapter *na = NA(ifp);
-	struct e1000_rx_ring *rxr = &adapter->rx_ring[ring_nr];
-	struct netmap_kring *kring = &na->rx_rings[ring_nr];
+	struct netmap_adapter *na = kring->na;
+	struct ifnet *ifp = na->ifp;
 	struct netmap_ring *ring = kring->ring;
-	u_int j, l, n, lim = kring->nkr_num_slots - 1;
-	int force_update = do_lock || kring->nr_kflags & NKR_PENDINTR;
-	u_int k = ring->cur, resvd = ring->reserved;
+	u_int ring_nr = kring->ring_id;
+	u_int nm_i;	/* index into the netmap ring */
+	u_int nic_i;	/* index into the NIC ring */
+	u_int n;
+	u_int const lim = kring->nkr_num_slots - 1;
+	u_int const head = kring->rhead;
+	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
-	if (k > lim)
+	/* device-specific */
+	struct SOFTC_T *adapter = netdev_priv(ifp);
+	struct e1000_rx_ring *rxr = &adapter->rx_ring[ring_nr];
+
+	if (!netif_carrier_ok(ifp)) {
+		goto out;
+	}
+
+	if (head > lim)
 		return netmap_ring_reinit(kring);
 
-	if (do_lock)
-		mtx_lock(&kring->q_lock);
 	rmb();
+
 	/*
-	 * Import newly received packets into the netmap ring.
-	 * j is an index in the netmap ring, l in the NIC ring.
+	 * First part: import newly received packets.
 	 */
-	l = rxr->next_to_clean;
-	j = netmap_idx_n2k(kring, l);
 	if (netmap_no_pendintr || force_update) {
+		uint16_t slot_flags = kring->nkr_slot_flags;
+
+		nic_i = rxr->next_to_clean;
+		nm_i = netmap_idx_n2k(kring, nic_i);
+
 		for (n = 0; ; n++) {
-			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, l);
+			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, nic_i);
 			uint32_t staterr = le32toh(curr->status);
 
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
-			ring->slot[j].len = le16toh(curr->length) - 4;
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			ring->slot[nm_i].len = le16toh(curr->length) - 4;
+			ring->slot[nm_i].flags = slot_flags;
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
 		if (n) { /* update the state variables */
-			rxr->next_to_clean = l;
-			kring->nr_hwavail += n;
+			rxr->next_to_clean = nic_i;
+			kring->nr_hwtail = nm_i;
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
 
-	/* skip past packets that userspace has released */
-	j = kring->nr_hwcur; /* netmap ring index */
-	if (resvd > 0) {
-		if (resvd + ring->avail >= lim + 1) {
-			D("XXX invalid reserve/avail %d %d", resvd, ring->avail);
-			ring->reserved = resvd = 0; // XXX panic...
-		}
-		k = (k >= resvd) ? k - resvd : k + lim + 1 - resvd;
-	}
-	if (j != k) { /* userspace has released some packets. */
-		l = netmap_idx_k2n(kring, j); /* NIC ring index */
-		for (n = 0; j != k; n++) {
-			struct netmap_slot *slot = &ring->slot[j];
-			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, j);
+	/*
+	 * Second part: skip past packets that userspace has released.
+	 */
+	nm_i = kring->nr_hwcur;
+	if (nm_i != head) {
+		nic_i = netmap_idx_k2n(kring, nm_i);
+		for (n = 0; nm_i != head; n++) {
+			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
-			void *addr = PNMB(slot, &paddr);
+			void *addr = PNMB(na, slot, &paddr);
+			struct e1000_rx_desc *curr = E1000_RX_DESC(*rxr, nic_i);
 
-			if (addr == netmap_buffer_base) { /* bad buf */
-				if (do_lock)
-					mtx_unlock(&kring->q_lock);
-				return netmap_ring_reinit(kring);
-			}
+			if (addr == NETMAP_BUF_BASE(na)) /* bad buf */
+				goto ring_reset;
 			if (slot->flags & NS_BUF_CHANGED) {
 				// netmap_reload_map(...)
 				curr->buffer_addr = htole64(paddr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
 			curr->status = 0;
-			j = (j == lim) ? 0 : j + 1;
-			l = (l == lim) ? 0 : l + 1;
+			nm_i = nm_next(nm_i, lim);
+			nic_i = nm_next(nic_i, lim);
 		}
-		kring->nr_hwavail -= n;
-		kring->nr_hwcur = k;
+		kring->nr_hwcur = head;
+		rxr->next_to_use = nic_i; // XXX not really used
 		wmb();
-		rxr->next_to_use = l; // XXX not really used
 		/*
 		 * IMPORTANT: we must leave one free slot in the ring,
-		 * so move l back by one unit
+		 * so move nic_i back by one unit
 		 */
-		l = (l == 0) ? lim : l - 1;
-		writel(l, adapter->hw.hw_addr + rxr->rdt);
+		nic_i = nm_prev(nic_i, lim);
+		writel(nic_i, adapter->hw.hw_addr + rxr->rdt);
 	}
-	/* tell userspace that there are new packets */
-	ring->avail = kring->nr_hwavail - resvd;
+out:
 
-	if (do_lock)
-		mtx_unlock(&kring->q_lock);
 	return 0;
+
+ring_reset:
+	return netmap_ring_reinit(kring);
 }
 
 
@@ -295,50 +297,253 @@ static int e1000_netmap_init_buffers(struct SOFTC_T *adapter)
 	unsigned int i, r, si;
 	uint64_t paddr;
 
-	if (!na || !(na->ifp->if_capenable & IFCAP_NETMAP))
+	if (!nm_native_on(na))
 		return 0;
+
 	adapter->alloc_rx_buf = e1000_no_rx_alloc;
 	for (r = 0; r < na->num_rx_rings; r++) {
 		struct e1000_rx_ring *rxr;
 		slot = netmap_reset(na, NR_RX, r, 0);
 		if (!slot) {
-			D("strange, null netmap ring %d", r);
-			return 0;
+			D("Skipping RX ring %d, netmap mode not requested", r);
+			continue;
 		}
 		rxr = &adapter->rx_ring[r];
 
 		for (i = 0; i < rxr->count; i++) {
-			// XXX the skb check and cleanup can go away
-			struct e1000_buffer *bi = &rxr->buffer_info[i];
 			si = netmap_idx_n2k(&na->rx_rings[r], i);
-			PNMB(slot + si, &paddr);
-			if (bi->skb)
-				D("rx buf %d was set", i);
-			bi->skb = NULL;
+			PNMB(na, slot + si, &paddr);
 			// netmap_load_map(...)
 			E1000_RX_DESC(*rxr, i)->buffer_addr = htole64(paddr);
 		}
 
 		rxr->next_to_use = 0;
 		/* preserve buffers already made available to clients */
-		i = rxr->count - 1 - na->rx_rings[0].nr_hwavail;
-		if (i < 0)
-		i += rxr->count;
+		i = rxr->count - 1 - nm_kr_rxspace(&na->rx_rings[0]);
+		if (i < 0) // XXX something wrong here, can it really happen ?
+			i += rxr->count;
 		D("i now is %d", i);
 		wmb(); /* Force memory writes to complete */
 		writel(i, hw->hw_addr + rxr->rdt);
 	}
+
 	/* now initialize the tx ring(s) */
-	slot = netmap_reset(na, NR_TX, 0, 0);
-	for (i = 0; i < na->num_tx_desc; i++) {
-		si = netmap_idx_n2k(&na->tx_rings[0], i);
-		PNMB(slot + si, &paddr);
-		// netmap_load_map(...)
-		E1000_TX_DESC(*txr, i)->buffer_addr = htole64(paddr);
+	for (r = 0; r < na->num_tx_rings; r++) {
+		slot = netmap_reset(na, NR_TX, r, 0);
+		if (!slot) {
+			D("Skipping TX ring %d, netmap mode not requested", r);
+			continue;
+		}
+
+		for (i = 0; i < na->num_tx_desc; i++) {
+			si = netmap_idx_n2k(&na->tx_rings[r], i);
+			PNMB(na, slot + si, &paddr);
+			// netmap_load_map(...)
+			E1000_TX_DESC(*txr, i)->buffer_addr = htole64(paddr);
+		}
 	}
+
 	return 1;
 }
 
+#if defined (CONFIG_E1000_NETMAP_PT) && defined (WITH_PTNETMAP_GUEST)
+/*
+ * ptnetmap support for: e1000 (linux version)
+ *
+ * For details on ptnetmap support please see virtio_netmap.h
+ */
+static uint32_t e1000_ptnetmap_ptctl(struct net_device *, uint32_t);
+
+/* Returns device configuration from the CSB */
+static int
+e1000_ptnetmap_config(struct netmap_adapter *na,
+		u_int *txr, u_int *txd, u_int *rxr, u_int *rxd)
+{
+	struct e1000_adapter *adapter = netdev_priv(na->ifp);
+	struct paravirt_csb *csb = adapter->csb;
+	int ret;
+
+	if (csb == NULL)
+		return EINVAL;
+
+	ret = e1000_ptnetmap_ptctl(na->ifp, NET_PARAVIRT_PTCTL_CONFIG);
+	if (ret)
+		return ret;
+
+	*txr = 1; //*txr = csb->num_tx_rings;
+	*rxr = 1; //*rxr = csb->num_rx_rings;
+	*txd = csb->num_tx_slots;
+	*rxd = csb->num_rx_slots;
+
+	D("txr %u rxr %u txd %u rxd %u",
+			*txr, *rxr, *txd, *rxd);
+	return 0;
+}
+
+/* Reconcile host and guest view of the transmit ring. */
+static int
+e1000_ptnetmap_txsync(struct netmap_kring *kring, int flags)
+{
+	struct netmap_adapter *na = kring->na;
+	//u_int ring_nr = kring->ring_id;
+	struct ifnet *ifp = na->ifp;
+	struct e1000_adapter *adapter = netdev_priv(ifp);
+	struct e1000_tx_ring* txr = &adapter->tx_ring[0];
+	bool notify;
+
+        IFRATE(adapter->rate_ctx.new.tx_sync++);
+
+	notify = netmap_pt_guest_txsync(kring, flags);
+	if (notify)
+		writel(0, adapter->hw.hw_addr + txr->tdt);
+
+	return 0;
+}
+
+/* Reconcile host and guest view of the receive ring. */
+static int
+e1000_ptnetmap_rxsync(struct netmap_kring *kring, int flags)
+{
+	struct netmap_adapter *na = kring->na;
+	//u_int ring_nr = kring->ring_id;
+	struct ifnet *ifp = na->ifp;
+	struct e1000_adapter *adapter = netdev_priv(ifp);
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_rx_ring *rxr = &adapter->rx_ring[0];
+	bool notify;
+
+        IFRATE(adapter->rate_ctx.new.rx_sync++);
+
+	notify = netmap_pt_guest_rxsync(kring, flags);
+	if (notify)
+		writel(0, hw->hw_addr + rxr->rdt);
+
+	return 0;
+}
+
+/* Register/unregister. We are already under netmap lock. */
+static int
+e1000_ptnetmap_reg(struct netmap_adapter *na, int onoff)
+{
+	struct e1000_adapter *adapter = netdev_priv(na->ifp);
+	struct paravirt_csb *csb = adapter->csb;
+	struct netmap_kring *kring = NULL;
+	int ret = 0;
+
+	if (onoff) {
+		ret = e1000_ptnetmap_ptctl(na->ifp, NET_PARAVIRT_PTCTL_REGIF);
+		if (ret)
+			return ret;
+
+		/*
+		 * Init ring and kring pointers
+		 * After PARAVIRT_PTCTL_REGIF, the csb contains a snapshot of a
+		 * host kring pointers.
+		 * XXX This initialization is required, because we don't close
+		 * the host port on UNREGIF.
+		 */
+
+		/* init rx kring */
+		kring = na->rx_rings;
+		kring->rhead = kring->ring->head = csb->rx_ring.head;
+		kring->rcur = kring->ring->cur = csb->rx_ring.cur;
+		kring->nr_hwcur = csb->rx_ring.hwcur;
+		kring->nr_hwtail = kring->rtail = kring->ring->tail =
+			csb->rx_ring.hwtail;
+		/* Force modes on, independently of the user's request. */
+		kring->nr_pending_mode = kring->nr_mode = NKR_NETMAP_ON;
+
+		/* init tx kring */
+		kring = na->tx_rings;
+		kring->rhead = kring->ring->head = csb->tx_ring.head;
+		kring->rcur = kring->ring->cur = csb->tx_ring.cur;
+		kring->nr_hwcur = csb->tx_ring.hwcur;
+		kring->nr_hwtail = kring->rtail = kring->ring->tail =
+			csb->tx_ring.hwtail;
+		/* Force modes on, independently of the user's request. */
+		kring->nr_pending_mode = kring->nr_mode = NKR_NETMAP_ON;
+
+		adapter->ptnetmap_enabled = 1;
+		na->na_flags |= NAF_NETMAP_ON;
+
+	} else {
+		na->na_flags &= ~NAF_NETMAP_ON;
+		adapter->ptnetmap_enabled = 0;
+
+		/* Force modes off, independently of the user's request. */
+		kring = na->tx_rings;
+		kring->nr_pending_mode = kring->nr_mode = NKR_NETMAP_OFF;
+		kring = na->rx_rings;
+		kring->nr_pending_mode = kring->nr_mode = NKR_NETMAP_OFF;
+
+		ret = e1000_ptnetmap_ptctl(na->ifp, NET_PARAVIRT_PTCTL_UNREGIF);
+	}
+
+	return ret;
+}
+
+static int
+e1000_ptnetmap_bdg_attach(const char *bdg_name, struct netmap_adapter *na)
+{
+	return EOPNOTSUPP;
+}
+
+/*
+ * CSB (Communication Status Block) setup
+ * CSB is already allocated in e1000 (paravirt).
+ */
+static void
+e1000_ptnetmap_setup_csb(struct SOFTC_T *adapter)
+{
+	struct ifnet *ifp = adapter->netdev;
+	struct netmap_pt_guest_adapter* ptna =
+		(struct netmap_pt_guest_adapter *)NA(ifp);
+
+	ptna->csb = adapter->csb;
+}
+
+/* Send command to the host through PTCTL register. */
+static uint32_t
+e1000_ptnetmap_ptctl(struct net_device *netdev, uint32_t val)
+{
+	struct e1000_adapter *adapter = netdev_priv(netdev);
+	struct e1000_hw *hw = &adapter->hw;
+	uint32_t ret;
+
+	ew32(PTCTL, val);
+	ret = er32(PTSTS);
+	D("PTSTS = %u", ret);
+
+	return ret;
+}
+
+/* Features negotiation with the host through PTFEAT */
+static uint32_t
+e1000_ptnetmap_features(struct SOFTC_T *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	struct net_device *netdev = adapter->netdev;
+	uint32_t features;
+	/* tell the device the features we support */
+	ew32(PTFEAT, NET_PTN_FEATURES_BASE); /* we are cheating for now */
+	/* get back the acknowledged features */
+	features = er32(PTFEAT);
+	pr_info("%s ptnetmap support: %s\n", netdev->name,
+			(features & NET_PTN_FEATURES_BASE) ? "base" :
+			"none");
+	return features;
+}
+
+static struct netmap_pt_guest_ops e1000_ptnetmap_ops = {
+	.nm_ptctl = e1000_ptnetmap_ptctl,
+};
+#elif defined (CONFIG_E1000_NETMAP_PT)
+#warning "e1000 supports ptnetmap but netmap does not support it"
+#warning "(configure netmap with ptnetmap support)"
+#elif defined (WITH_PTNETMAP_GUEST)
+#warning "netmap supports ptnetmap but e1000 does not support it"
+#warning "(configure e1000 with ptnetmap support)"
+#endif /* CONFIG_E1000_NETMAP_PT && WITH_PTNETMAP_GUEST */
 
 static void
 e1000_netmap_attach(struct SOFTC_T *adapter)
@@ -348,12 +553,30 @@ e1000_netmap_attach(struct SOFTC_T *adapter)
 	bzero(&na, sizeof(na));
 
 	na.ifp = adapter->netdev;
-	na.separate_locks = 0;
+	na.pdev = &adapter->pdev->dev;
 	na.num_tx_desc = adapter->tx_ring[0].count;
 	na.num_rx_desc = adapter->rx_ring[0].count;
 	na.nm_register = e1000_netmap_reg;
 	na.nm_txsync = e1000_netmap_txsync;
 	na.nm_rxsync = e1000_netmap_rxsync;
-	netmap_attach(&na, 1);
+	na.num_tx_rings = na.num_rx_rings = 1;
+	na.nm_intr = e1000_netmap_intr;
+
+#if defined (CONFIG_E1000_NETMAP_PT) && defined (WITH_PTNETMAP_GUEST)
+        /* XXX:check device ptnetmap support (now we use PARAVIRT_SUBDEV) */
+	if (paravirtual &&
+		(adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) &&
+	        (e1000_ptnetmap_features(adapter) & NET_PTN_FEATURES_BASE)) {
+		na.nm_config = e1000_ptnetmap_config;
+		na.nm_register = e1000_ptnetmap_reg;
+		na.nm_txsync = e1000_ptnetmap_txsync;
+		na.nm_rxsync = e1000_ptnetmap_rxsync;
+		na.nm_bdg_attach = e1000_ptnetmap_bdg_attach; /* XXX */
+		netmap_pt_guest_attach(&na, &e1000_ptnetmap_ops);
+		e1000_ptnetmap_setup_csb(adapter);
+	} else
+#endif /* CONFIG_E1000_NETMAP_PT && WITH_PTNETMAP_GUEST */
+	netmap_attach(&na);
 }
+
 /* end of file */

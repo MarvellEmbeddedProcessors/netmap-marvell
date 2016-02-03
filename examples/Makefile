@@ -1,45 +1,53 @@
 # For multiple programs using a single source file each,
 # we can just define 'progs' and create custom targets.
-#PROGS	=	pkt-gen bridge testpcap libnetmap.so
+PROGS	=	pkt-gen bridge vale-ctl pkt-gen-b bridge-b
 #PROGS += pingd
-#PROGS	+= testlock testcsum test_select kern_test
-PROGS   =       pkt-gen bridge
+PROGS	+= testlock test_select testmmap vale-ctl
+MORE_PROGS = kern_test
 
-CC = $(CROSS_COMPILE)gcc
-
-CLEANFILES = $(PROGS) pcap.o nm_util.o *.o
+CLEANFILES = $(PROGS) *.o
 NO_MAN=
 CFLAGS = -O2 -pipe
-CFLAGS += -Werror -Wall
-CFLAGS += -I../sys
+CFLAGS += -Werror -Wall -Wunused-function
+CFLAGS += -I ../sys # -I/home/luigi/FreeBSD/head/sys -I../sys
 CFLAGS += -Wextra
+.ifdef WITH_PCAP
+LDFLAGS += -lpcap
+.else
+CFLAGS += -DNO_PCAP
+.endif
 
-include $(KSRC)/include/config/auto.conf
-ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
-CFLAGS += -big-endian
-endif
-
-LDFLAGS += -lpthread #-lpcap
-LDFLAGS += -lrt	# on linux
+LDFLAGS += -lpthread
+LDFLAGS += -lrt	# needed on linux, does not harm on BSD
+#SRCS = pkt-gen.c
 
 all: $(PROGS)
 
-testpcap: pcap.c libnetmap.so nm_util.o
-	$(CC) $(CFLAGS) -DTEST -o testpcap pcap.c nm_util.o $(LDFLAGS)
-
 kern_test: testmod/kern_test.c
 
-nm_util.o pkt-gen.o bridge.o libnetmap.so pcap.o: nm_util.h
+pkt-gen: pkt-gen.o
+	$(CC) $(CFLAGS) -o pkt-gen pkt-gen.o $(LDFLAGS)
 
-pkt-gen: pkt-gen.o nm_util.o
-	$(CC) $(CFLAGS) -o pkt-gen pkt-gen.o nm_util.o $(LDFLAGS)
+pkt-gen-b: pkt-gen-b.o
+	$(CC) $(CFLAGS) -o pkt-gen-b pkt-gen-b.o $(LDFLAGS)
 
-bridge: bridge.o nm_util.o
+pkt-gen-b.o: pkt-gen.c
+	$(CC) $(CFLAGS) -DBUSYWAIT -c pkt-gen.c -o pkt-gen-b.o
 
-libnetmap.so:	pcap.c nm_util.c
-	$(CC) $(CFLAGS) -fpic -c pcap.c
-	$(CC) $(CFLAGS) -fpic -c nm_util.c
-	$(CC) -shared -o ${.TARGET} pcap.o nm_util.o
+bridge: bridge.o
+	$(CC) $(CFLAGS) -o bridge bridge.o
+	
+bridge-b: bridge-b.o
+	$(CC) $(CFLAGS) -o bridge-b bridge-b.o
+
+bridge-b.o: bridge.c
+	$(CC) $(CFLAGS) -DBUSYWAIT -c bridge.c -o bridge-b.o	
+
+vale-ctl: vale-ctl.o
+	$(CC) $(CFLAGS) -o vale-ctl vale-ctl.o
 
 clean:
 	-@rm -rf $(CLEANFILES)
+
+testlock: testlock.c
+	$(CC) $(CFLAGS) -o testlock testlock.c -lpthread $(LDFLAGS)

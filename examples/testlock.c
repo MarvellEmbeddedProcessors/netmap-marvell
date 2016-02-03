@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2012-2014 Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,11 +24,16 @@
  */
 
 /*
- * $Id: testlock.c 11469 2012-07-30 16:23:55Z luigi $
+ * $Id$
  *
- * Test program to study various concurrency issues.
+ * Test program to study various ops and concurrency issues.
  * Create multiple threads, possibly bind to cpus, and run a workload.
+ *
+ * cc -O2 -Werror -Wall testlock.c -o testlock -lpthread
+ *	you might need -lrt
  */
+
+#define _GNU_SOURCE	// setaffinity ?
 
 #include <inttypes.h>
 #include <sys/types.h>
@@ -36,18 +41,17 @@
 
 #if defined(__APPLE__)
 
+#include <net/if_var.h>
 #include <libkern/OSAtomic.h>
 #define atomic_add_int(p, n) OSAtomicAdd32(n, (int *)p)
 #define	atomic_cmpset_32(p, o, n)	OSAtomicCompareAndSwap32(o, n, (int *)p)
 
 #elif defined(linux)
 
-int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
-{
-	int ret = *p == old;
-	*p = new;
-	return ret;
-}
+#define atomic_cmpset_32(p, o, n) __sync_bool_compare_and_swap(p, o, n)
+#include <sched.h>	// affinity
+#define HAVE_AFFINITY	1
+#define	cpuset_t	cpu_set_t
 
 #if defined(HAVE_GCC_ATOMICS)
 int atomic_add_int(volatile int *p, int v)
@@ -78,11 +82,6 @@ uint32_t atomic_add_int(uint32_t *p, int v)
 #define HAVE_AFFINITY
 #endif
 
-inline void prefetch (const void *x)
-{
-        __asm volatile("prefetcht0 %0" :: "m" (*(const unsigned long *)x));
-}
-
 
 #else /* FreeBSD 4.x */
 int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
@@ -109,8 +108,6 @@ int atomic_cmpset_32(volatile uint32_t *p, uint32_t old, uint32_t new)
 
 #include <sys/sysctl.h>	/* sysctl */
 #include <sys/time.h>	/* timersub */
-
-static inline int min(int a, int b) { return a < b ? a : b; }
 
 #define ONE_MILLION	1000000
 /* debug support */
@@ -157,12 +154,14 @@ struct glob_arg {
 	struct  {
 		uint32_t	ctr[1024];
 	} v __attribute__ ((aligned(256) ));
-	int m_cycles;	/* million cycles */
+	int64_t m_cycles;	/* total cycles */
 	int nthreads;
 	int cpus;
 	int privs;	// 1 if has IO privileges
 	int arg;	// microseconds in usleep
+	int nullfd;	// open(/dev/null)
 	char *test_name;
+	pthread_mutex_t mtx;
 	void (*fn)(struct targ *);
 	uint64_t scale;	// scaling factor
 	char *scale_name;	// scaling factor
@@ -210,7 +209,7 @@ static int
 system_ncpus(void)
 {
 #ifdef linux
-	return 1;
+	return sysconf(_SC_NPROCESSORS_ONLN);
 #else
 	int mib[2] = { CTL_HW, HW_NCPU}, ncpus;
 	size_t len = sizeof(mib);
@@ -269,7 +268,8 @@ td_body(void *data)
 #endif
 	{
 		/* main loop.*/
-		D("testing %d cycles", t->g->m_cycles);
+		D("testing %"PRIu64" cycles arg %d",
+			t->g->m_cycles, t->g->arg);
 		gettimeofday(&t->tic, NULL);
 		t->g->fn(t);
 		gettimeofday(&t->toc, NULL);
@@ -278,17 +278,104 @@ td_body(void *data)
 	return (NULL);
 }
 
+#include <sys/wait.h>
+
+void
+test_fork(struct targ *t)
+{
+	int arg = t->g->arg;
+	int m;
+	struct timeval tot = {0, 0};
+	struct timeval ta, tb;
+	char *p = NULL;
+	int sum = 0;
+	long int i;
+	int np=arg*1000000/4096;
+	p = malloc(arg*1000000);
+
+	D("memsize is %d MB", arg);
+
+	if (arg > 0) {
+		if (p == NULL)
+			D("malloc failed");
+		D("pages %d %s %s", np, arg & 1 ? "READ" : "",
+			arg & 2 ? "WRITE" : "");
+	}
+	for (m = 0; m < t->g->m_cycles; m++) {
+		int pid;
+		int st = 0;
+		if (arg & 1) for (i = 0; i < arg*1000000; i += 4096) {
+			sum += p[i];
+		}
+		if (arg & 2) for (i = 0; i < arg*1000000; i += 4096) {
+			p[i] = 3;
+		}
+		ta.tv_sec = sum;
+		gettimeofday(&ta, NULL);
+		pid = fork();
+		if (pid == 0)
+			exit(0);
+		gettimeofday(&tb, NULL);
+		if (waitpid(-1, &st, WNOHANG) > 0) // another try
+			waitpid(-1, &st, WNOHANG);
+
+		tot.tv_sec += (tb.tv_sec - ta.tv_sec);
+		tot.tv_usec += (tb.tv_usec - ta.tv_usec);
+		if (tot.tv_usec < 0) {
+			tot.tv_sec--;
+			tot.tv_usec += ONE_MILLION;
+		} else if (tot.tv_usec >= ONE_MILLION) {
+			tot.tv_sec++;
+			tot.tv_usec -= ONE_MILLION;
+		}
+		t->count++;
+	}
+	D("avg is %lu ns", (unsigned long)
+		((tot.tv_sec * ONE_MILLION + tot.tv_usec)*1000/t->count));
+	if (p)
+		free(p);
+}
+
+/*
+ * select and poll:
+ *	arg	fd	timeout
+ *	>0	block	>0
+ *	 0	block	0
+ *		block	NULL (not implemented)
+ *	< -2	ready	-arg
+ *	-1	ready	0
+ *	-2	ready	NULL / <0 for poll
+ *
+ * arg = -1 -> NULL timeout (select)
+ */
 void
 test_sel(struct targ *t)
 {
-	int m;
+	int arg = t->g->arg;
+	// stdin is blocking on reads /dev/null or /dev/zero are not
+	int fd = (arg < 0) ? t->g->nullfd : 0;
+	fd_set r;
+	struct timeval t0 = { 0, arg};
+	struct timeval tcur, *tp = (arg == -2) ? NULL : &tcur;
+	int64_t m;
+
+	if (arg == -1)
+		t0.tv_usec = 0;
+	else if (arg < -2)
+		t0.tv_usec = -arg;
+
+	D("tp %p mode %s timeout %d", tp, arg < 0 ? "ready" : "block",
+		(int)t0.tv_usec);
 	for (m = 0; m < t->g->m_cycles; m++) {
-		fd_set r;
-		struct timeval to = { 0, t->g->arg};
+		int ret;
+		tcur = t0;
 		FD_ZERO(&r);
-		FD_SET(0,&r);
-		// FD_SET(1,&r);
-		select(1, &r, NULL, NULL, &to);
+		FD_SET(fd, &r);
+		ret = select(fd+1, &r, NULL, NULL, tp);
+		(void)ret;
+		ND("ret %d r %d w %d", ret,
+			FD_ISSET(fd, &r),
+			FD_ISSET(fd, &w));
 		t->count++;
 	}
 }
@@ -296,10 +383,25 @@ test_sel(struct targ *t)
 void
 test_poll(struct targ *t)
 {
-	int m, ms = t->g->arg/1000;
+	int arg = t->g->arg;
+	// stdin is blocking on reads /dev/null is not
+	int fd = (arg < 0) ? t->g->nullfd : 0;
+	int64_t m;
+	int ms;
+
+	if (arg == -1)
+		ms = 0;
+	else if (arg == -2)
+		ms = -1; /* blocking */
+	else if (arg < 0)
+		ms = -arg/1000;
+	else
+		ms = arg/1000;
+
+	D("mode %s timeout %d", arg < 0 ? "ready" : "block", ms);
 	for (m = 0; m < t->g->m_cycles; m++) {
 		struct pollfd x;
-		x.fd = 0;
+		x.fd = fd;
 		x.events = POLLIN;
 		poll(&x, 1, ms);
 		t->count++;
@@ -309,7 +411,7 @@ test_poll(struct targ *t)
 void
 test_usleep(struct targ *t)
 {
-	int m;
+	int64_t m;
 	for (m = 0; m < t->g->m_cycles; m++) {
 		usleep(t->g->arg);
 		t->count++;
@@ -319,7 +421,7 @@ test_usleep(struct targ *t)
 void
 test_cli(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	if (!t->g->privs) {	
 		D("%s", "privileged instructions not available");
 		return;
@@ -337,7 +439,7 @@ test_cli(struct targ *t)
 void
 test_nop(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
 			__asm __volatile("nop;");
@@ -351,7 +453,7 @@ test_nop(struct targ *t)
 void
 test_rdtsc1(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	uint64_t v;
 	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
@@ -365,21 +467,21 @@ test_rdtsc1(struct targ *t)
 void
 test_rdtsc(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
 	volatile uint64_t v;
-	(void)v;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	v = rdtsc();
 			t->count++;
 		}
         }
+	(void)v;
 }
 
 void
 test_add(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	t->glob_ctr[0] ++;
@@ -391,7 +493,7 @@ test_add(struct targ *t)
 void
 test_atomic_add(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
                 	atomic_add_int(t->glob_ctr, 1);
@@ -403,7 +505,7 @@ test_atomic_add(struct targ *t)
 void
 test_atomic_cmpset(struct targ *t)
 {
-        int m, i;
+        int64_t m, i;
         for (m = 0; m < t->g->m_cycles; m++) {
 		for (i = 0; i < ONE_MILLION; i++) {
 		        atomic_cmpset_32(t->glob_ctr, m, i);
@@ -413,9 +515,40 @@ test_atomic_cmpset(struct targ *t)
 }
 
 void
+test_pthread_mutex(struct targ *t)
+{
+        int64_t m, i;
+	pthread_mutex_t *mtx = &t->g->mtx;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < ONE_MILLION; i++) {
+		        pthread_mutex_lock(mtx);
+			t->count++;
+		        pthread_mutex_unlock(mtx);
+		}
+        }
+}
+
+volatile int foo;
+
+void
+test_spinlock(struct targ *t)
+{
+        int64_t m, i;
+//	uint64_t min = 1000000, minp=1000000, max=0, maxp = 0, cur=0;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		for (i = 0; i < 100*ONE_MILLION; i++) {
+		        while (!atomic_cmpset_32(t->glob_ctr, 0, 1)) {
+			}
+			t->count++;
+		        atomic_cmpset_32(t->glob_ctr, 1, 0);
+		}
+        }
+}
+
+void
 test_time(struct targ *t)
 {
-        int m;
+        int64_t m;
         for (m = 0; m < t->g->m_cycles; m++) {
 #ifndef __APPLE__
 		struct timespec ts;
@@ -428,7 +561,7 @@ test_time(struct targ *t)
 void
 test_gettimeofday(struct targ *t)
 {
-        int m;
+        int64_t m;
 	struct timeval ts;
         for (m = 0; m < t->g->m_cycles; m++) {
 		gettimeofday(&ts, NULL);
@@ -436,13 +569,29 @@ test_gettimeofday(struct targ *t)
         }
 }
 
-static inline void
+/*
+ * getppid is the simplest system call (getpid is cached by glibc
+ * so it would not be a good test)
+ */
+void
+test_getpid(struct targ *t)
+{
+        int64_t m;
+        for (m = 0; m < t->g->m_cycles; m++) {
+		getppid();
+		t->count++;
+        }
+}
+
+
+#define likely(x)	__builtin_expect(!!(x), 1)
+#define unlikely(x)	__builtin_expect(!!(x), 0)
+
+static void
 fast_bcopy(void *_src, void *_dst, int l)
 {
 	uint64_t *src = _src;
 	uint64_t *dst = _dst;
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)       __builtin_expect(!!(x), 0)
 	if (unlikely(l >= 1024)) {
 		bcopy(src, dst, l);
 		return;
@@ -452,53 +601,176 @@ fast_bcopy(void *_src, void *_dst, int l)
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
-#if 1
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
-#endif
 	}
 }
-	
+
+static inline void
+asmcopy(void *dst, void *src, uint64_t l)
+{
+	(void)dst;
+	(void)src;
+	asm(
+	"\n\t"
+	"movq %0, %%rcx\n\t"
+	"addq $7, %%rcx\n\t"
+	"shrq $03, %%rcx\n\t"
+	"cld\n\t"
+	"movq %1, %%rdi\n\t"
+	"movq %2, %%rsi\n\t"
+	"repe movsq\n\t"
+/*	"movq %0, %%rcx\n\t"
+	"andq $0x7, %%rcx\n\t"
+	"repe movsb\n\t"
+*/
+	: /* out */
+	: "r" (l), "r" (dst), "r" (src) /* in */
+	: "%rcx", "%rsi", "%rdi" /* clobbered */
+	);
+
+}
+// XXX if you want to make sure there is no inlining...
+// static void (*fp)(void *_src, void *_dst, int l) = fast_bcopy;
+
 #define HU	0x3ffff
 static struct glob_arg huge[HU+1];
+
+void
+test_fastcopy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("fast copying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		fast_bcopy(t->g, (void *)&huge[m & HU], len);
+		t->count+=1;
+        }
+}
+
+void
+test_asmcopy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("fast copying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		asmcopy((void *)&huge[m & HU], t->g, len);
+		t->count+=1;
+        }
+}
+
 void
 test_bcopy(struct targ *t)
 {
-        int m, len;
-	len = t->g->arg;
+        int64_t m;
+	int len = t->g->arg;
+
 	if (len > (int)sizeof(struct glob_arg))
 		len = sizeof(struct glob_arg);
-	D("copying %d bytes", len);
+	D("bcopying %d bytes", len);
         for (m = 0; m < t->g->m_cycles; m++) {
-		//bcopy(t->g, (void *)&huge[m & HU], len);
-		fast_bcopy(t->g, (void *)&huge[m & HU], len);
-		//memcpy((void *)&huge[m & HU], t->g, len);
+		bcopy(t->g, (void *)&huge[m & HU], len);
 		t->count+=1;
         }
+}
+
+void
+test_builtin_memcpy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("bcopying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		__builtin_memcpy((void *)&huge[m & HU], t->g, len);
+		t->count+=1;
+        }
+}
+
+void
+test_memcpy(struct targ *t)
+{
+        int64_t m;
+	int len = t->g->arg;
+
+	if (len > (int)sizeof(struct glob_arg))
+		len = sizeof(struct glob_arg);
+	D("memcopying %d bytes", len);
+        for (m = 0; m < t->g->m_cycles; m++) {
+		memcpy((void *)&huge[m & HU], t->g, len);
+		t->count+=1;
+        }
+}
+
+#include <sys/ioctl.h>
+#include <sys/socket.h>	// OSX
+#include <net/if.h>
+#include <net/netmap.h>
+void
+test_netmap(struct targ *t)
+{
+	struct nmreq nmr;
+	int fd;
+        int64_t m, scale;
+
+	scale = t->g->m_cycles / 100;
+	fd = open("/dev/netmap", O_RDWR);
+	if (fd < 0) {
+		D("fail to open netmap, exit");
+		return;
+	}
+	bzero(&nmr, sizeof(nmr));
+        for (m = 0; m < t->g->m_cycles; m += scale) {
+		nmr.nr_version = 666;
+		nmr.nr_cmd = t->g->arg;
+		nmr.nr_offset = (uint32_t)scale;
+		ioctl(fd, NIOCGINFO, &nmr);
+		t->count += scale;
+        }
+	return;
 }
 
 struct entry {
 	void (*fn)(struct targ *);
 	char *name;
 	uint64_t scale;
+	uint64_t m_cycles;
 };
 struct entry tests[] = {
-	{ test_sel, "select", 1 },
-	{ test_poll, "poll", 1 },
-	{ test_usleep, "usleep", 1 },
-	{ test_time, "time", 1 },
-	{ test_gettimeofday, "gettimeofday", 1 },
-	{ test_bcopy, "bcopy", 1 },
-	{ test_add, "add", ONE_MILLION },
-	{ test_nop, "nop", ONE_MILLION },
-	{ test_atomic_add, "atomic-add", ONE_MILLION },
-	{ test_cli, "cli", ONE_MILLION },
-	{ test_rdtsc, "rdtsc", ONE_MILLION },	// unserialized
-	{ test_rdtsc1, "rdtsc1", ONE_MILLION },	// serialized
-	{ test_atomic_cmpset, "cmpset", ONE_MILLION },
-	{ NULL, NULL, 0 }
+	{ test_fork, "fork", 1, 1000 },
+	{ test_sel, "select", 1, 1000 },
+	{ test_poll, "poll", 1, 1000 },
+	{ test_usleep, "usleep", 1, 1000 },
+	{ test_time, "time", 1, 1000 },
+	{ test_gettimeofday, "gettimeofday", 1, 1000000 },
+	{ test_getpid, "getpid", 1, 1000000 },
+	{ test_bcopy, "bcopy", 1000, 100000000 },
+	{ test_builtin_memcpy, "__builtin_memcpy", 1000, 100000000 },
+	{ test_memcpy, "memcpy", 1000, 100000000 },
+	{ test_fastcopy, "fastcopy", 1000, 100000000 },
+	{ test_asmcopy, "asmcopy", 1000, 100000000 },
+	{ test_add, "add", ONE_MILLION, 100000000 },
+	{ test_nop, "nop", ONE_MILLION, 100000000 },
+	{ test_atomic_add, "atomic-add", ONE_MILLION, 100000000 },
+	{ test_cli, "cli", ONE_MILLION, 100000000 },
+	{ test_rdtsc, "rdtsc", ONE_MILLION, 100000000 },	// unserialized
+	{ test_rdtsc1, "rdtsc1", ONE_MILLION, 100000000 },	// serialized
+	{ test_atomic_cmpset, "cmpset", ONE_MILLION, 100000000 },
+	{ test_netmap, "netmap", 1000, 100000000 },
+	{ test_pthread_mutex, "mutex", 1000, 100000000 },
+	{ test_spinlock, "spinlock", 1000, 100000000 },
+	{ NULL, NULL, 0, 0 }
 };
 
 static void
@@ -510,14 +782,14 @@ usage(void)
 	fprintf(stderr,
 		"Usage:\n"
 		"%s arguments\n"
+		"\t-m name		test name\n"
+		"\t-n cycles		(millions) of cycles\n"
+		"\t-l arg		bytes, usec, ... \n"
 		"\t-t threads		total threads\n"
 		"\t-c cores		cores to use\n"
 		"\t-a n			force affinity every n cores\n"
 		"\t-A n			cache contention every n bytes\n"
-		"\t-n cycles		(millions) of cycles\n"
 		"\t-w report_ms		milliseconds between reports\n"
-		"\t-m name		test name\n"
-		"\t-N arg		usec for select/usleep\n"
 		"",
 		cmd);
 	fprintf(stderr, "Available tests:\n");
@@ -528,6 +800,30 @@ usage(void)
 	exit(0);
 }
 
+static int64_t
+getnum(const char *s)
+{
+	int64_t n;
+	char *e;
+
+	n = strtol(s, &e, 0);
+	switch (e ? *e : '\0')  {
+	case 'k':
+	case 'K':
+		return n*1000;
+	case 'm':
+	case 'M':
+		return n*1000*1000;
+	case 'g':
+	case 'G':
+		return n*1000*1000*1000;
+	case 't':
+	case 'T':
+		return n*1000*1000*1000*1000;
+	default:
+		return n;
+	}
+}
 
 struct glob_arg g;
 int
@@ -543,11 +839,14 @@ main(int argc, char **argv)
 	bzero(&g, sizeof(g));
 
 	g.privs = getprivs();
+	pthread_mutex_init(&g.mtx, NULL);
 	g.nthreads = 1;
 	g.cpus = 1;
-	g.m_cycles = 1000;	/* millions */
+	g.m_cycles = 0;
+	g.nullfd = open("/dev/zero", O_RDWR);
+	D("nullfd is %d", g.nullfd);
 
-	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vN:")) != -1) {
+	while ( (ch = getopt(argc, argv, "A:a:m:n:w:c:t:vl:")) != -1) {
 		switch(ch) {
 		default:
 			D("bad option %c %s", ch, optarg);
@@ -560,7 +859,7 @@ main(int argc, char **argv)
 			affinity = atoi(optarg);
 			break;
 		case 'n':	/* cycles */
-			g.m_cycles = atoi(optarg);
+			g.m_cycles = getnum(optarg);
 			break;
 		case 'w':	/* report interval */
 			report_interval = atoi(optarg);
@@ -574,8 +873,8 @@ main(int argc, char **argv)
 		case 'm':
 			g.test_name = optarg;
 			break;
-		case 'N':
-			g.arg = atoi(optarg);
+		case 'l':
+			g.arg = getnum(optarg);
 			break;
 
 		case 'v':
@@ -593,10 +892,12 @@ main(int argc, char **argv)
 			if (!strcmp(g.test_name, tests[i].name)) {
 				g.fn = tests[i].fn;
 				g.scale = tests[i].scale;
+				if (g.m_cycles == 0)
+					g.m_cycles = tests[i].m_cycles;
 				if (g.scale == ONE_MILLION)
 					g.scale_name = "M";
 				else if (g.scale == 1000)
-					g.scale_name = "M";
+					g.scale_name = "K";
 				else {
 					g.scale = 1;
 					g.scale_name = "";
@@ -678,13 +979,14 @@ main(int argc, char **argv)
 		if (pps < 10000)
 			continue;
 		pps = (my_count - prev)*ONE_MILLION / pps;
-		D("%" PRIu64 " %scycles/s scale %" PRIu64, pps/g.scale,
-			g.scale_name, g.scale);
+		D("%" PRIu64 " %scycles/s scale %" PRIu64 " in %dus", pps/g.scale,
+			g.scale_name, g.scale, (int)(toc.tv_sec* ONE_MILLION + toc.tv_usec));
 		prev = my_count;
 		toc = now;
 		if (done == g.nthreads)
 			break;
 	}
+	D("total %" PRIu64 " cycles", prev);
 
 	timerclear(&tic);
 	timerclear(&toc);
