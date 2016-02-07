@@ -36,6 +36,7 @@
 #include <net/sch_generic.h>
 
 #include "netmap_linux_config.h"
+#include <net/ip6_checksum.h>
 
 void
 nm_os_ifnet_lock(void)

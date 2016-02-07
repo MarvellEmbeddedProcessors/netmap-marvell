@@ -87,7 +87,7 @@ subsys enable generic
 
 # available drivers
 driver_avail="r8169.c virtio_net.c forcedeth.c veth.c \
-	e1000 e1000e igb ixgbe i40e"
+	e1000 e1000e igb ixgbe i40e mvpp2x"
 # enabled drivers (bitfield)
 driver=
 
@@ -1292,6 +1292,10 @@ add_test 'define I40E_PTR_ARRAY' <<-EOF
 	}
 EOF
 fi # i40e
+
+
+
+
 
 # END_TESTS
 

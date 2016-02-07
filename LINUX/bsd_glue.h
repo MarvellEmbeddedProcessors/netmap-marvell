@@ -331,12 +331,12 @@ static inline int ilog2(uint64_t n)
 #define contigmalloc(sz, ty, flags, a, b, pgsz, c) ({		\
 	unsigned int order_ =					\
 		ilog2(roundup_pow_of_two(sz)/PAGE_SIZE);	\
-	struct page *p_ = alloc_pages(GFP_ATOMIC | __GFP_ZERO,  \
+	struct page *p_ = alloc_pages(GFP_ATOMIC | __GFP_ZERO | GFP_DMA,  \
 		order_);					\
 	if (p_ != NULL) 					\
 		split_page(p_, order_);				\
 	(p_ != NULL ? (char*)page_address(p_) : NULL); })
-	
+
 #define contigfree(va, sz, ty)					\
 	do {							\
 		unsigned int npages_ =				\
