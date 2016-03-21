@@ -178,8 +178,9 @@ const char *indirect_payload="netmap pkt-gen indirect payload\n"
 
 int verbose = 0;
 
-#define SKIP_PAYLOAD 1 /* do not check payload. XXX unused */
+#define BUSY_WAIT
 
+#define SKIP_PAYLOAD 1 /* do not check payload. XXX unused */
 
 #define VIRT_HDR_1	10	/* length of a base vnet-hdr */
 #define VIRT_HDR_2	12	/* length of the extenede vnet-hdr */
@@ -710,7 +711,7 @@ initialize_packet(struct targ *targ)
 	pcap_t *file;
 	struct pcap_pkthdr *header;
 	const unsigned char *packet;
-	
+
 	/* Read a packet from a PCAP file if asked. */
 	if (targ->g->packet_file != NULL) {
 		if ((file = pcap_open_offline(targ->g->packet_file,
@@ -854,6 +855,7 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
 		if (options & OPT_DUMP)
 			dump_payload(p, size, ring, cur);
 		slot->len = size;
+		slot->data_offs = 0;
 		if (--fcnt > 0)
 			slot->flags |= NS_MOREFRAG;
 		else
@@ -1042,7 +1044,6 @@ ponger_body(void *data)
 	D("understood ponger %d but don't know how to do it", n);
 	while (!targ->cancel && (n == 0 || sent < n)) {
 		uint32_t txcur, txavail;
-//#define BUSY_WAIT
 #ifdef BUSY_WAIT
 		ioctl(pfd.fd, NIOCRXSYNC, NULL);
 #else
@@ -1072,8 +1073,8 @@ ponger_body(void *data)
 				dst = NETMAP_BUF(txring,
 				    txring->slot[txcur].buf_idx);
 				/* copy... */
-				dpkt = (uint16_t *)dst;
-				spkt = (uint16_t *)src;
+				dpkt = (uint16_t *)(dst + slot->data_offs);
+				spkt = (uint16_t *)(src + slot->data_offs);
 				nm_pkt_copy(src, dst, slot->len);
 				dpkt[0] = spkt[3];
 				dpkt[1] = spkt[4];
@@ -1082,6 +1083,7 @@ ponger_body(void *data)
 				dpkt[4] = spkt[1];
 				dpkt[5] = spkt[2];
 				txring->slot[txcur].len = slot->len;
+				txring->slot[txcur].data_offs= slot->data_offs;
 				/* XXX swap src dst mac */
 				txcur = nm_ring_next(txring, txcur);
 				txavail--;
@@ -1146,7 +1148,6 @@ sender_body(void *data)
 		frame = targ->frame;
 		size = targ->g->pkt_size;
 	}
-	
 	D("start, fd %d main_fd %d", targ->fd, targ->g->main_fd);
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
@@ -1322,7 +1323,7 @@ receive_packets(struct netmap_ring *ring, u_int limit, int dump, uint64_t *bytes
 
 		*bytes += slot->len;
 		if (dump)
-			dump_payload(p, slot->len, ring, cur);
+			dump_payload((p + slot->data_offs), slot->len , ring, cur);
 
 		cur = nm_ring_next(ring, cur);
 	}

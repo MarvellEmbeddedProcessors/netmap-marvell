@@ -88,6 +88,8 @@ process_rings(struct netmap_ring *rxring, struct netmap_ring *txring,
 			D("%s send len %d rx[%d] -> tx[%d]", msg, rs->len, j, k);
 		}
 		ts->len = rs->len;
+		ts->data_offs = rs->data_offs;
+
 		if (zerocopy) {
 			uint32_t pkt = ts->buf_idx;
 			ts->buf_idx = rs->buf_idx;
@@ -162,7 +164,7 @@ main(int argc, char **argv)
 	u_int burst = 1024, wait_link = 4;
 	struct nm_desc *pa = NULL, *pb = NULL;
 	char *ifa = NULL, *ifb = NULL;
-	char ifabuf[64] = { 0 };
+	/*char ifabuf[64] = { 0 };*/
 
 	fprintf(stderr, "%s built %s %s\n",
 		argv[0], __DATE__, __TIME__);
@@ -222,9 +224,10 @@ main(int argc, char **argv)
 		wait_link = 4;
 	}
 	if (!strcmp(ifa, ifb)) {
-		D("same interface, endpoint 0 goes to host");
-		snprintf(ifabuf, sizeof(ifabuf) - 1, "%s^", ifa);
-		ifa = ifabuf;
+		/*D("same interface, endpoint 0 goes to host");*/
+		/*snprintf(ifabuf, sizeof(ifabuf) - 1, "%s^", ifa);*/
+		/*ifa = ifabuf;*/
+		D("same interface, send loopback");
 	} else {
 		/* two different interfaces. Take all rings on if1 */
 	}
