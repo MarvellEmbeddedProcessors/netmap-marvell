@@ -878,7 +878,7 @@ netmap_obj_free(struct netmap_obj_pool *p, uint32_t j)
 	ptr = &p->bitmap[j / 32];
 	mask = (1 << (j % 32));
 	if (*ptr & mask) {
-		D("ouch, double free on buffer %d", j);
+		/*D("ouch, double free on buffer %d", j);*/
 		return 1;
 	} else {
 		*ptr |= mask;
@@ -1740,7 +1740,7 @@ netmap_mem2_rings_create(struct netmap_adapter *na)
 			ring->head = kring->rhead;
 			ring->cur = kring->rcur;
 			ring->tail = kring->rtail;
-			*(uint16_t *)(uintptr_t)&ring->nr_buf_size =
+			*(uint32_t *)(uintptr_t)&ring->nr_buf_size =
 				netmap_mem_bufsize(na->nm_mem);
 			ND("%s h %d c %d t %d", kring->name,
 				ring->head, ring->cur, ring->tail);
