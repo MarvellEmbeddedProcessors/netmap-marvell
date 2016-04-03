@@ -69,6 +69,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		DBG_MSG("Netmap started\n");
 
 		nm_set_native_flags(na);
+		adapter->flags |= MVPP2_F_IFCAP_NETMAP;
 
 		/* release BM buffers only once for all IF */
 		/* Keep old number of long pool buffers */
@@ -93,7 +94,6 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		/* update short pool in software */
 		pool_short[adapter->id] = adapter->pool_short;
 		adapter->pool_short = adapter->pool_long;
-		adapter->flags |= MVPP2_F_IFCAP_NETMAP;
 	} else {
 		struct sk_buff *vaddr;
 		u_int i = 0;
@@ -110,11 +110,11 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 					adapter->pool_long->id);
 				i++;
 			} while (vaddr);
-			adapter->pool_long->buf_num -= (i - 1);
-			DBG_MSG("released %d buffers, remain %d\n",
-				i - 1, adapter->pool_long->buf_num);
-			DBG_MSG("restore: %d\n",
-				pool_buf_num[adapter->pool_long->id]);
+			adapter->pool_long->buf_num = 0;
+			/*DBG_MSG("released %d buffers, remain %d \n",
+				i - 1, adapter->pool_long->buf_num);*/
+			/*DBG_MSG("restore: %d\n",
+				pool_buf_num[adapter->pool_long->id]);*/
 			mv_pp2x_bm_bufs_add(adapter, adapter->pool_long,
 				pool_buf_num[adapter->pool_long->id]);
 			pool_buf_num[adapter->pool_long->id] = 0;
