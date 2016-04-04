@@ -878,7 +878,7 @@ netmap_obj_free(struct netmap_obj_pool *p, uint32_t j)
 	ptr = &p->bitmap[j / 32];
 	mask = (1 << (j % 32));
 	if (*ptr & mask) {
-		/*D("ouch, double free on buffer %d", j);*/
+		D("ouch, double free on buffer %d", j);
 		return 1;
 	} else {
 		*ptr |= mask;

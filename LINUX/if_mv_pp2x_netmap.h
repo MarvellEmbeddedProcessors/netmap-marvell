@@ -37,6 +37,8 @@ disclaimer.
 
 static int pool_buf_num[MVPP2_BM_POOLS_NUM];
 static struct mv_pp2x_bm_pool *pool_short[MVPP2_MAX_PORTS];
+static int buf_idx_rx[MVPP2_MAX_PORTS * MVPP2_MAX_RXQ];
+static int buf_idx_tx[MVPP2_MAX_PORTS * MVPP2_MAX_TXQ];
 
 /*
  * Register/unregister
@@ -50,7 +52,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	int rxq;
+	int rxq, queue, si;
 
 	if (na == NULL)
 		return -EINVAL;
@@ -78,8 +80,8 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			pool_buf_num[adapter->pool_long->id] =
 				adapter->pool_long->buf_num;
 
-			DBG_MSG("free: %d buffers\n",
-				adapter->pool_long->buf_num);
+			/*DBG_MSG("free: %d buffers\n",
+				adapter->pool_long->buf_num);*/
 
 			mv_pp2x_bm_bufs_free(adapter->priv, adapter->pool_long,
 				adapter->pool_long->buf_num);
@@ -96,14 +98,43 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		adapter->pool_short = adapter->pool_long;
 	} else {
 		struct sk_buff *vaddr;
-		u_int i = 0;
+		u_int i,idx;
 
 		DBG_MSG("Netmap stop\n");
 
 		nm_clear_native_flags(na);
 
+		/* restore buf_idx to original place in ring
+		 * Netmap releases buffers according to buf_idx, so
+		 * they need to be in place.
+		 */
+		for (queue = 0; queue < adapter->num_rx_queues; queue++) {
+			struct netmap_kring *kring = &na->rx_rings[queue];
+			struct netmap_ring *ring = kring->ring;
+			struct netmap_slot *slot = &ring->slot[0];
+
+			idx = adapter->id * adapter->num_rx_queues + queue;
+			for (i = 0; i < na->num_rx_desc; i++) {
+				si = netmap_idx_n2k(&na->rx_rings[queue], i);
+				(slot+si)->buf_idx = buf_idx_rx[idx] + i;
+			}
+		}
+
+		for (queue = 0; queue < adapter->num_tx_queues; queue++) {
+			struct netmap_kring *kring = &na->tx_rings[queue];
+			struct netmap_ring *ring = kring->ring;
+			struct netmap_slot *slot = &ring->slot[0];
+
+			idx = adapter->id * adapter->num_rx_queues + queue;
+			for (i = 0; i < na->num_rx_desc; i++) {
+				si = netmap_idx_n2k(&na->tx_rings[queue], i);
+				(slot+si)->buf_idx = buf_idx_tx[idx] + i;
+			}
+		}
+
 		if (pool_buf_num[adapter->pool_long->id] != 0) {
 			/* Allocate BM buffers */
+			i = 0;
 			do {
 				vaddr = mv_pp2x_bm_virt_addr_get(
 					&(adapter->priv->hw),
@@ -268,9 +299,9 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	nic_i = ((tx_sent + nic_i) % kring->nkr_num_slots);
 	kring->nr_hwtail = netmap_idx_n2k(kring, nic_i);
 
-	/*DBG_MSG("nr_hwcur: %d, nr_hwtail: %d, head: %d, sent: %d, tx_sent: %d, nic_i: %d, ring_nr: %d\n",
+	/*DBG_MSG("hwcur %d, hwtail %d, head %d, tx_sent %d, nic_i: %d, ring_nr: %d\n",
 		kring->nr_hwcur, kring->nr_hwtail, head,
-		sent, tx_sent, nic_i, ring_nr);*/
+		tx_sent, nic_i, ring_nr);*/
 out:
 
 	return 0;
@@ -332,7 +363,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			uint64_t paddr;
 
-			void *addr = PNMB(na, slot, &paddr);
+			PNMB(na, slot, &paddr);
 
 #if defined(__BIG_ENDIAN)
 			if (adapter->priv->pp2_version == PPV21)
@@ -346,15 +377,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 						strip_crc - MVPP2_MH_SIZE;
 			slot->data_offs = NET_SKB_PAD +
 						MVPP2_MH_SIZE;
-
 			slot->buf_idx = (uintptr_t)(struct sk_buff *)
 				mv_pp22_rxdesc_cookie_get(curr);
-
-			/*DBG_MSG("2 na %s slot %p, index %d, new_index %d, paddr %p\n",
-				na->name, slot, slot->buf_idx,
-				mv_pp22_rxdesc_cookie_get(curr),
-				paddr);*/
-
 			slot->flags = slot_flags;
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
@@ -430,7 +454,6 @@ ring_reset:
 	return netmap_ring_reinit(kring);
 }
 
-
 /*
  * Make the rx ring point to the netmap buffers.
  */
@@ -454,15 +477,18 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 		if (!slot)
 			return 0;	/* not in netmap native mode*/
 
-		DBG_MSG("%s: na %s queue %d, slot %p, rxq->id %d, rxq->size %d\n",
-			__func__, na->name, queue, slot, rxq->id, rxq->size);
+		buf_idx_rx[(adapter->id * adapter->num_rx_queues) + queue] =
+			slot->buf_idx;
+
+		/*DBG_MSG("na %s port %d, rxq->id %d, rxq->size %d\n",
+			na->name, adapter->id, queue, rxq->id, rxq->size);*/
+		/*DBG_MSG("slot %p, buf_idx[%d]: %d \n",
+			slot, (adapter->id * adapter->num_rx_queues) + queue,
+			slot->buf_idx);*/
 
 		for (i = 0; i < na->num_rx_desc; i++) {
 			si = netmap_idx_n2k(&na->rx_rings[queue], i);
 			addr = PNMB(na, slot+si, &paddr);
-
-			/*DBG_MSG("1 slot %p, index %d, paddr %p, addr %p\n",
-				(slot+si), (slot+si)->buf_idx, paddr, addr);*/
 
 			mv_pp2x_pool_refill(adapter->priv,
 				adapter->pool_long->id,
@@ -475,7 +501,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 			adapter->pool_long->buf_num / 4;
 		rxq->next_desc_to_proc = 0;
 		/* Force memory writes to complete */
-		wmb(); /* synchronize writes to the NIC ring */
+		/*wmb(); */ /* synchronize writes to the NIC ring */
 		/*mv_pp2x_rxq_status_update(adapter, rxq->id, 0, rxq->size);*/
 
 	}
@@ -502,6 +528,10 @@ static int mv_pp2x_netmap_txq_init_buffers(struct SOFTC_T *adapter)
 		slot = netmap_reset(na, NR_TX, queue, 0);
 		if (!slot)
 			return 0;
+
+		buf_idx_tx[(adapter->id * adapter->num_tx_queues) + queue] =
+			slot->buf_idx;
+
 		/*DBG_MSG("%s: queue %d, slot %x, id %d, size %d tx_desc %d\n",
 			__func__, queue, slot, txq->id, txq->size, na->num_tx_desc);*/
 	}
@@ -526,8 +556,8 @@ mv_pp2x_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 	*rxd = adapter->rx_ring_size;
 	*txd = adapter->tx_ring_size;
 
-        D("mvpp2x config txq=%d, txd=%d rxq=%d, rxd=%d",
-		*txr, *txd, *rxr, *rxd);
+        /*DBG_MSG("mvpp2x config txq=%d, txd=%d rxq=%d, rxd=%d",
+		*txr, *txd, *rxr, *rxd);*/
 
 	return 0;
 }
