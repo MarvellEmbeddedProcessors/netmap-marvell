@@ -1883,7 +1883,7 @@ netmap_krings_put(struct netmap_priv_d *priv)
 			priv->np_qfirst[NR_TX],
 			priv->np_qlast[NR_TX],
 			priv->np_qfirst[NR_RX],
-			priv->np_qlast[MR_RX]);
+			priv->np_qlast[NR_RX]);
 
 
 	for_rx_tx(t) {
