@@ -1351,6 +1351,9 @@ receiver_body(void *data)
 	D("reading from %s fd %d main_fd %d",
 		targ->g->ifname, targ->fd, targ->g->main_fd);
 	/* unbounded wait for the first packet. */
+#if 0
+	/* [AW] Removed. Causes problems when starting pkt-gen in rx mode
+	   with traffic on remote side already turned on at max rate*/
 	for (;!targ->cancel;) {
 		i = poll(&pfd, 1, 1000);
 		if (i > 0 && !(pfd.revents & POLLERR))
@@ -1358,6 +1361,7 @@ receiver_body(void *data)
 		RD(1, "waiting for initial packets, poll returns %d %d",
 			i, pfd.revents);
 	}
+#endif
 	/* main loop, exit after 1s silence */
 	clock_gettime(CLOCK_REALTIME_PRECISE, &targ->tic);
     if (targ->g->dev_type == DEV_TAP) {

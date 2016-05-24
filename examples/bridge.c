@@ -164,6 +164,7 @@ main(int argc, char **argv)
 	u_int burst = 1024, wait_link = 4;
 	struct nm_desc *pa = NULL, *pb = NULL;
 	char *ifa = NULL, *ifb = NULL;
+	int loopback = 0;
 	/*char ifabuf[64] = { 0 };*/
 
 	fprintf(stderr, "%s built %s %s\n",
@@ -227,6 +228,7 @@ main(int argc, char **argv)
 		/*D("same interface, endpoint 0 goes to host");*/
 		/*snprintf(ifabuf, sizeof(ifabuf) - 1, "%s^", ifa);*/
 		/*ifa = ifabuf;*/
+		loopback = 1;
 		D("same interface, send loopback");
 	} else {
 		/* two different interfaces. Take all rings on if1 */
@@ -260,11 +262,12 @@ main(int argc, char **argv)
 	/* main loop */
 	signal(SIGINT, sigint_h);
 	while (!do_abort) {
-		int n0, n1, ret;
+		int n0, n1 = 0, ret;
 		pollfd[0].events = pollfd[1].events = 0;
 		pollfd[0].revents = pollfd[1].revents = 0;
 		n0 = pkt_queued(pa, 0);
-		n1 = pkt_queued(pb, 0);
+		if (!loopback)
+			n1 = pkt_queued(pb, 0);
 #if defined(_WIN32) || defined(BUSYWAIT)
 		if (n0){
 			ioctl(pollfd[1].fd, NIOCTXSYNC, NULL);
@@ -273,12 +276,14 @@ main(int argc, char **argv)
 		else {
 			ioctl(pollfd[0].fd, NIOCRXSYNC, NULL);
 		}
-		if (n1){
-			ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
-			pollfd[0].revents = POLLOUT;
-		}
-		else {
-			ioctl(pollfd[1].fd, NIOCRXSYNC, NULL);
+		if (!loopback) {
+			if (n1){
+				ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
+				pollfd[0].revents = POLLOUT;
+			}
+			else {
+				ioctl(pollfd[1].fd, NIOCRXSYNC, NULL);
+			}
 		}
 		ret = 1;
 #else
@@ -286,10 +291,12 @@ main(int argc, char **argv)
 			pollfd[1].events |= POLLOUT;
 		else
 			pollfd[0].events |= POLLIN;
-		if (n1)
-			pollfd[0].events |= POLLOUT;
-		else
-			pollfd[1].events |= POLLIN;
+		if (!loopback) {
+			if (n1)
+				pollfd[0].events |= POLLOUT;
+			else
+				pollfd[1].events |= POLLIN;
+		}
 		ret = poll(pollfd, 2, 2500);
 #endif //defined(_WIN32) || defined(BUSYWAIT)
 		if (ret <= 0 || verbose)
