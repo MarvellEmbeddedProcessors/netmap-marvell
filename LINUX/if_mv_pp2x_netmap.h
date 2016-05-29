@@ -84,7 +84,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 				adapter->pool_long->buf_num);*/
 
 			mv_pp2x_bm_bufs_free(adapter->priv, adapter->pool_long,
-				adapter->pool_long->buf_num);
+				adapter->pool_long->buf_num, 0);
 		}
 
 		/* set same pool number for short and long packets */
@@ -192,6 +192,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct mv_pp2x_txq_pcpu *txq_pcpu;
 	struct mv_pp2x_tx_queue *txq;
 	u_int tx_sent;
+	u8 first_addr_space;
 
 	/* generate an interrupt approximately every half ring */
 	/*u_int report_frequency = kring->nkr_num_slots >> 1;*/
@@ -204,6 +205,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	txq = adapter->txqs[ring_nr];
 	txq_pcpu = this_cpu_ptr(txq->pcpu);
 	aggr_txq = &adapter->priv->aggr_txqs[smp_processor_id()];
+	first_addr_space = adapter->priv->pp2_cfg.first_sw_thread;
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -254,7 +256,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 				 MVPP2_TXD_L_DESC;
 
 			mv_pp2x_txq_inc_put(adapter->priv->pp2_version,
-				txq_pcpu, (struct sk_buff *)addr, tx_desc);
+				txq_pcpu, addr, tx_desc);
 
 			txq_pcpu->count += 1;
 			txq_pcpu->reserved_num -= 1;
@@ -287,7 +289,8 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	 * Second part: reclaim buffers for completed transmissions.
 	 */
 	nic_i = netmap_idx_k2n(kring, kring->nr_hwtail);
-	tx_sent = mv_pp2x_txq_sent_desc_proc(adapter, txq);
+	tx_sent = mv_pp2x_txq_sent_desc_proc(adapter,
+			(first_addr_space + txq_pcpu->cpu),txq->id);
 	txq_pcpu->count -= tx_sent;
 
 	if (tx_sent >= kring->nkr_num_slots) {
@@ -306,7 +309,6 @@ out:
 
 	return 0;
 }
-
 
 /*
  * Reconcile kernel and user view of the receive ring.
@@ -377,7 +379,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 						strip_crc - MVPP2_MH_SIZE;
 			slot->data_offs = NET_SKB_PAD +
 						MVPP2_MH_SIZE;
-			slot->buf_idx = (uintptr_t)(struct sk_buff *)
+			slot->buf_idx = (uintptr_t)
 				mv_pp22_rxdesc_cookie_get(curr);
 			slot->flags = slot_flags;
 			nm_i = nm_next(nm_i, lim);
@@ -432,8 +434,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 			mv_pp2x_pool_refill(adapter->priv,
 				adapter->pool_long->id,
-				paddr, (struct sk_buff *)
-				mv_pp22_rxdesc_cookie_get(curr));
+				paddr, mv_pp22_rxdesc_cookie_get(curr));
 
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
@@ -492,8 +493,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 
 			mv_pp2x_pool_refill(adapter->priv,
 				adapter->pool_long->id,
-				paddr, (struct sk_buff *)
-				(uint64_t)(slot+si)->buf_idx);
+				paddr, (u8 *)(uint64_t)(slot+si)->buf_idx);
 		}
 		added_buffers += i;
 		adapter->pool_long->buf_num += i;
