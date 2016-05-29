@@ -353,7 +353,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		/* Get number of received packets */
 		uint16_t slot_flags = kring->nkr_slot_flags;
 		/* TBD :: remove CRC or not */
-		uint16_t strip_crc = (1) ? 4 : 0;
+		uint16_t strip_crc = (0) ? 4 : 0;
 
 		rx_done = mv_pp2x_rxq_received(adapter, rxq->id);
 		rx_done = (rx_done >= lim) ? lim - 1 : rx_done;
