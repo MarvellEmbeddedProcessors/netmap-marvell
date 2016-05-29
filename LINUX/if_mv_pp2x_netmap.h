@@ -319,11 +319,24 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct mv_pp2x_rx_queue *rxq = adapter->rxqs[ring_nr];
-	struct queue_vector *q_vec = &adapter->q_vector[smp_processor_id()];
+	struct queue_vector *q_vec;
+	struct mv_pp2x_rx_queue *rxq;
 
-	if (!netif_carrier_ok(ifp))
+	if (!netif_carrier_ok(ifp)) {
 		return 0;
+	}
+	if (adapter->priv->pp2_cfg.queue_mode == MVPP2_QDIST_SINGLE_MODE)
+		q_vec = &adapter->q_vector[num_active_cpus()];
+	else
+		q_vec = &adapter->q_vector[smp_processor_id()];
+
+
+	if ((ring_nr < q_vec->first_rx_queue) ||
+	    (ring_nr >= (q_vec->first_rx_queue + q_vec->num_rx_queues))) {
+		return 0;
+	}
+
+	rxq = adapter->rxqs[ring_nr];
 
 	if (head > lim)
 		return netmap_ring_reinit(kring);
