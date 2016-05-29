@@ -216,14 +216,6 @@ struct netmap_slot {
 	 *  are the number of fragments.
 	 */
 
-
-#if defined(NETMAP_V11_64BIT)
-struct timeval64 {
-	uint64_t  tv_sec;       /* seconds */
-	uint64_t  tv_usec;      /* microseconds */
-};
-#endif
-
 /*
  * struct netmap_ring
  *
@@ -282,13 +274,7 @@ struct netmap_ring {
 	uint32_t	tail;		/* (k) first kernel slot */
 
 	uint32_t	flags;
-
-#if defined(NETMAP_V11_64BIT)
-	uint8_t 	padding[4];
-	struct timeval64 ts;		/* (k) time of last *sync() */
-#else
 	struct timeval	ts;		/* (k) time of last *sync() */
-#endif
 
 	/* opaque room for a mutex or similar object */
 #if !defined(_WIN32) || defined(__CYGWIN__)
@@ -356,8 +342,8 @@ struct netmap_if {
 	 * The area is filled up by the kernel on NIOCREGIF,
 	 * and then only read by userspace code.
 	 */
-#if defined(NETMAP_V11_64BIT)
-	const uint64_t	ring_ofs[0];
+#if defined(NETMAP_32BIT)
+	const uint32_t	ring_ofs[0];
 #else
 	const ssize_t	ring_ofs[0];
 #endif

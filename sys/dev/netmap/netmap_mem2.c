@@ -1833,11 +1833,19 @@ netmap_mem2_if_new(struct netmap_adapter *na)
 	 */
 	base = netmap_if_offset(na->nm_mem, nifp);
 	for (i = 0; i < n[NR_TX]; i++) {
+#if defined(NETMAP_32BIT)
+		*(uint32_t *)(uintptr_t)&nifp->ring_ofs[i] =
+#else
 		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i] =
+#endif
 			netmap_ring_offset(na->nm_mem, na->tx_rings[i].ring) - base;
 	}
 	for (i = 0; i < n[NR_RX]; i++) {
-		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i+n[NR_TX]] =
+#if defined(NETMAP_32BIT)
+		*(uint32_t *)(uintptr_t)&nifp->ring_ofs[i + n[NR_TX]] =
+#else
+		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i + n[NR_TX]] =
+#endif
 			netmap_ring_offset(na->nm_mem, na->rx_rings[i].ring) - base;
 	}
 
