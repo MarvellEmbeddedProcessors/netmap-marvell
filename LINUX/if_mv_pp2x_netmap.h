@@ -43,8 +43,17 @@ struct mvpp2_ntmp_buf_idx {
 	int tx;
 };
 
-static struct mvpp2_ntmp_buf_idx buf_idx[MVPP2_NETMAP_MAX_QUEUES_NUM];
-static int bm_pool_num[MVPP2_MAX_CELLS];
+struct mvpp2_ntmp_cell_params {
+	int bm_pool_num;
+	int active_if;
+};
+
+struct mvpp2_ntmp_params {
+	struct mvpp2_ntmp_buf_idx buf_idx[MVPP2_NETMAP_MAX_QUEUES_NUM];
+	struct mvpp2_ntmp_cell_params cell_params[MVPP2_MAX_CELLS];
+};
+
+static struct mvpp2_ntmp_params *ntmp_params;
 
 /*
  * Register/unregister
@@ -58,6 +67,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
+	struct mvpp2_ntmp_cell_params *cell_params;
 	u_int rxq, queue, si, cell_id;
 
 	if (na == NULL)
@@ -73,6 +83,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	DBG_MSG("%s: stopping interface\n", ifp->name);
 
 	cell_id = adapter->priv->pp2_cfg.cell_index;
+	cell_params = &ntmp_params->cell_params[cell_id];
 
 	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
@@ -82,15 +93,15 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 
 		nm_set_native_flags(na);
 		adapter->flags |= MVPP2_F_IFCAP_NETMAP;
-
-		if (bm_pool_num[cell_id] == 0) {
+		cell_params->active_if++;
+		if (cell_params->bm_pool_num == 0) {
 			if (mv_pp2x_bm_pool_add(ifp->dev.parent,
 				adapter->priv, &pool,
 				MVPP2_BM_NETMAP_PKT_SIZE) != 0) {
 				DBG_MSG("Unable to allocate a new pool\n");
 				return -EINVAL;
 			}
-			bm_pool_num[cell_id] = pool;
+			cell_params->bm_pool_num = pool;
 		}
 	} else {
 		u_int i,idx;
@@ -99,44 +110,48 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 
 		nm_clear_native_flags(na);
 
-		if (bm_pool_num[cell_id] != 0) {
+		idx = cell_id * MVPP2_MAX_PORTS * MVPP2_MAX_RXQ
+		      + adapter->id * MVPP2_MAX_RXQ;
+		/* restore buf_idx to original place in ring
+		 * Netmap releases buffers according to buf_idx, so
+		 * they need to be in place.
+		 */
+		for (queue = 0; queue < adapter->num_rx_queues;
+		     queue++) {
+			struct netmap_kring *kring =
+				&na->rx_rings[queue];
+			struct netmap_ring *ring = kring->ring;
+			struct netmap_slot *slot = &ring->slot[0];
 
-			idx = cell_id * MVPP2_MAX_PORTS * MVPP2_MAX_RXQ
-			      + adapter->id * MVPP2_MAX_RXQ;
-			/* restore buf_idx to original place in ring
-			 * Netmap releases buffers according to buf_idx, so
-			 * they need to be in place.
-			 */
-			for (queue = 0; queue < adapter->num_rx_queues;
-			     queue++) {
-				struct netmap_kring *kring =
-					&na->rx_rings[queue];
-				struct netmap_ring *ring = kring->ring;
-				struct netmap_slot *slot = &ring->slot[0];
-
-				for (i = 0; i < na->num_rx_desc; i++) {
-					si = netmap_idx_n2k(
-						&na->rx_rings[queue], i);
-					(slot+si)->buf_idx =
-						buf_idx[idx + queue].rx	+ i;
-				}
+			for (i = 0; i < na->num_rx_desc; i++) {
+				si = netmap_idx_n2k(
+					&na->rx_rings[queue], i);
+				(slot+si)->buf_idx =
+					ntmp_params->buf_idx[idx + queue].rx	+ i;
 			}
+		}
+		for (queue = 0; queue < adapter->num_tx_queues;
+		     queue++) {
+			struct netmap_kring *kring =
+				&na->tx_rings[queue];
+			struct netmap_ring *ring = kring->ring;
+			struct netmap_slot *slot = &ring->slot[0];
 
-			for (queue = 0; queue < adapter->num_tx_queues;
-			     queue++) {
-				struct netmap_kring *kring =
-					&na->tx_rings[queue];
-				struct netmap_ring *ring = kring->ring;
-				struct netmap_slot *slot = &ring->slot[0];
-
-				for (i = 0; i < na->num_rx_desc; i++) {
-					si = netmap_idx_n2k(
-						&na->tx_rings[queue], i);
-					(slot+si)->buf_idx =
-						buf_idx[idx + queue].tx + i;
-				}
+			for (i = 0; i < na->num_rx_desc; i++) {
+				si = netmap_idx_n2k(
+					&na->tx_rings[queue], i);
+				(slot+si)->buf_idx =
+					ntmp_params->buf_idx[idx + queue].tx + i;
 			}
+		}
 
+		if (--cell_params->active_if < 0) {
+			DBG_MSG("Error in active interfaces\n");
+			return -EINVAL;
+		}
+		if (cell_params->active_if == 0) {
+			DBG_MSG("removig netmap BM pool %d from cell %d\n",
+				cell_params->bm_pool_num, cell_id);
 			for (rxq = 0; rxq < adapter->num_rx_queues; rxq++) {
 				mv_pp2x_swf_bm_pool_assign(adapter, rxq,
 						adapter->pool_long->id,
@@ -144,9 +159,9 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			}
 
 			mv_pp2x_bm_pool_destroy(ifp->dev.parent, adapter->priv,
-				&adapter->priv->bm_pools[bm_pool_num[cell_id]],
+				&adapter->priv->bm_pools[cell_params->bm_pool_num],
 				false);
-			bm_pool_num[cell_id] = 0;
+			cell_params->bm_pool_num = 0;
 		}
 
 		adapter->flags &= ~MVPP2_F_IFCAP_NETMAP;
@@ -435,7 +450,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 				DMA_FROM_DEVICE);
 
 			mv_pp2x_pool_refill(adapter->priv,
-				bm_pool_num[cell_id],
+				ntmp_params->cell_params[cell_id].bm_pool_num,
 				paddr, mv_pp22_rxdesc_cookie_get(curr));
 
 			if (slot->flags & NS_BUF_CHANGED)
@@ -468,6 +483,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	dma_addr_t paddr;
 	uint32_t *addr;
 	struct mv_pp2x_rx_queue *rxq;
+	struct mvpp2_ntmp_cell_params *cell_params;
 	u_int queue, idx, cell_id;
 	u_int added_buffers = 0;
 	u_int i, si;
@@ -475,6 +491,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	cell_id = adapter->priv->pp2_cfg.cell_index;
 	idx = cell_id * MVPP2_MAX_PORTS * MVPP2_MAX_RXQ
 	      + adapter->id * MVPP2_MAX_RXQ;
+	cell_params = &ntmp_params->cell_params[cell_id];
 
 	for (queue = 0; queue < adapter->num_rx_queues; queue++) {
 		rxq = adapter->rxqs[queue];
@@ -484,17 +501,17 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 		if (!slot)
 			return 0;	/* not in netmap native mode*/
 
-		buf_idx[idx + queue].rx = slot->buf_idx;
+		ntmp_params->buf_idx[idx + queue].rx = slot->buf_idx;
 
 		mv_pp2x_swf_bm_pool_assign(adapter, queue,
-			bm_pool_num[cell_id],
-			bm_pool_num[cell_id]);
+			cell_params->bm_pool_num,
+			cell_params->bm_pool_num);
 
 		for (i = 0; i < na->num_rx_desc; i++) {
 			si = netmap_idx_n2k(&na->rx_rings[queue], i);
 			addr = PNMB(na, slot+si, &paddr);
 			mv_pp2x_pool_refill(adapter->priv,
-				bm_pool_num[cell_id],
+				cell_params->bm_pool_num,
 				paddr, (u8 *)(uint64_t)(slot+si)->buf_idx);
 		}
 		added_buffers += i;
@@ -528,9 +545,7 @@ static int mv_pp2x_netmap_txq_init_buffers(struct SOFTC_T *adapter)
 		if (!slot)
 			return 0;
 
-
-		buf_idx[idx + queue].tx = slot->buf_idx;
-
+		ntmp_params->buf_idx[idx + queue].tx = slot->buf_idx;
 	}
 	return 1;
 }
@@ -563,6 +578,7 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 	struct netmap_adapter na;
 
 	bzero(&na, sizeof(na));
+	ntmp_params =  kmalloc(sizeof(*ntmp_params), GFP_KERNEL);
 
 	na.ifp = adapter->dev; /* struct net_device */
 	na.num_tx_desc = adapter->tx_ring_size;
