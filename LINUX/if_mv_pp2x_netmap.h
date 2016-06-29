@@ -1,29 +1,21 @@
-/*******************************************************************************
-Copyright (C) Marvell International Ltd. and its affiliates
+ /*
+ * ***************************************************************************
+ * Copyright (C) 2016 Marvell International Ltd.
+ * ***************************************************************************
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 2 of the License, or any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * ***************************************************************************
+ */
 
-This software file (the "File") is owned and distributed by Marvell
-International Ltd. and/or its affiliates ("Marvell") under the following
-alternative licensing terms.  Once you have made an election to distribute the
-File under one of the following license alternatives, please (i) delete this
-introductory statement regarding license alternatives, (ii) delete the two
-license alternatives that you have not elected to use and (iii) preserve the
-Marvell copyright notice above.
-
-********************************************************************************
-Marvell GPL License Option
-
-If you received this File from Marvell, you may opt to use, redistribute and/or
-modify this File in accordance with the terms and conditions of the General
-Public License Version 2, June 1991 (the "GPL License"), a copy of which is
-available along with the File in the license.txt file or by writing to the Free
-Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 or
-on the worldwide web at http://www.gnu.org/licenses/gpl.txt.
-
-THE FILE IS DISTRIBUTED AS-IS, WITHOUT WARRANTY OF ANY KIND, AND THE IMPLIED
-WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE ARE EXPRESSLY
-DISCLAIMED.  The GPL License provides additional details about this warranty
-disclaimer.
-*******************************************************************************/
 /* mv_pp2x_netmap.h */
 
 #ifndef __MV_PP2X_NETMAP_H__
@@ -35,7 +27,7 @@ disclaimer.
 
 #define SOFTC_T	mv_pp2x_port
 #define MVPP2_BM_NETMAP_PKT_SIZE 2048
-#define MVPP2_NETMAP_MAX_QUEUES_NUM 	(MVPP2_MAX_CELLS * MVPP2_MAX_PORTS * \
+#define MVPP2_NETMAP_MAX_QUEUES_NUM	(MVPP2_MAX_CELLS * MVPP2_MAX_PORTS * \
 					MVPP2_MAX_RXQ)
 
 struct mvpp2_ntmp_buf_idx {
@@ -53,7 +45,7 @@ struct mvpp2_ntmp_params {
 	struct mvpp2_ntmp_cell_params cell_params[MVPP2_MAX_CELLS];
 };
 
-static struct mvpp2_ntmp_params *ntmp_params = NULL;
+static struct mvpp2_ntmp_params *ntmp_params;
 
 /*
  * Register/unregister
@@ -70,13 +62,12 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct mvpp2_ntmp_cell_params *cell_params;
 	u_int rxq, queue, si, cell_id;
 
-	if (na == NULL)
+	if (!na)
 		return -EINVAL;
 
 	/* stop current interface */
-	if (!netif_running(adapter->dev)) {
+	if (!netif_running(adapter->dev))
 		return -EINVAL;
-	}
 
 	mv_pp2x_stop(adapter->dev);
 
@@ -104,7 +95,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			cell_params->bm_pool_num = pool;
 		}
 	} else {
-		u_int i,idx;
+		u_int i, idx;
 
 		DBG_MSG("Netmap stop\n");
 
@@ -126,7 +117,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			for (i = 0; i < na->num_rx_desc; i++) {
 				si = netmap_idx_n2k(
 					&na->rx_rings[queue], i);
-				(slot+si)->buf_idx =
+				(slot + si)->buf_idx =
 				    ntmp_params->buf_idx[idx + queue].rx + i;
 			}
 		}
@@ -140,7 +131,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			for (i = 0; i < na->num_rx_desc; i++) {
 				si = netmap_idx_n2k(
 					&na->tx_rings[queue], i);
-				(slot+si)->buf_idx =
+				(slot + si)->buf_idx =
 				    ntmp_params->buf_idx[idx + queue].tx + i;
 			}
 		}
@@ -159,8 +150,8 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			}
 
 			mv_pp2x_bm_pool_destroy(ifp->dev.parent, adapter->priv,
-				&adapter->priv->bm_pools[cell_params->bm_pool_num],
-				false);
+			    &adapter->priv->bm_pools[cell_params->bm_pool_num],
+			    false);
 			cell_params->bm_pool_num = 0;
 		}
 
@@ -215,9 +206,8 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 
-	if (!netif_carrier_ok(ifp)) {
+	if (!netif_carrier_ok(ifp))
 		goto out;
-	}
 
 	nm_i = kring->nr_hwcur;
 	if (nm_i != head) {	/* we have new packets to send */
@@ -225,7 +215,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
-			uint64_t paddr;
+			u64 paddr;
 			void *addr = PNMB(na, slot, &paddr);
 
 			/* device-specific */
@@ -239,7 +229,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			if (mv_pp2x_aggr_desc_num_check(adapter->priv,
 			    aggr_txq, 1) ||
 			    mv_pp2x_txq_reserved_desc_num_proc(
-			    adapter->priv,txq, txq_pcpu, 1)) {
+			    adapter->priv, txq, txq_pcpu, 1)) {
 				/*return netmap_ring_reinit(kring);*/
 				continue;
 			}
@@ -257,7 +247,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 				 MVPP2_TXD_L_DESC;
 
 			mv_pp2x_txq_inc_put(adapter->priv->pp2_version,
-				txq_pcpu, addr, tx_desc);
+					    txq_pcpu, addr, tx_desc);
 
 			txq_pcpu->count += 1;
 			txq_pcpu->reserved_num -= 1;
@@ -291,7 +281,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	 */
 	nic_i = netmap_idx_k2n(kring, kring->nr_hwtail);
 	tx_sent = mv_pp2x_txq_sent_desc_proc(adapter,
-			(first_addr_space + txq_pcpu->cpu),txq->id);
+				(first_addr_space + txq_pcpu->cpu), txq->id);
 	txq_pcpu->count -= tx_sent;
 
 	if (tx_sent >= kring->nkr_num_slots) {
@@ -304,8 +294,9 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	kring->nr_hwtail = netmap_idx_n2k(kring, nic_i);
 
 	/*DBG_MSG("hwcur %d, hwtail %d, head %d, tx_sent %d, nic_i: %d, ring_nr: %d\n",
-		kring->nr_hwcur, kring->nr_hwtail, head,
-		tx_sent, nic_i, ring_nr);*/
+		  kring->nr_hwcur, kring->nr_hwtail, head,
+		  tx_sent, nic_i, ring_nr);
+	*/
 out:
 
 	return 0;
@@ -336,14 +327,13 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	struct queue_vector *q_vec;
 	struct mv_pp2x_rx_queue *rxq;
 
-	if (!netif_carrier_ok(ifp)) {
+	if (!netif_carrier_ok(ifp))
 		return 0;
-	}
+
 	if (adapter->priv->pp2_cfg.queue_mode == MVPP2_QDIST_SINGLE_MODE)
 		q_vec = &adapter->q_vector[num_active_cpus()];
 	else
 		q_vec = &adapter->q_vector[smp_processor_id()];
-
 
 	if ((ring_nr < q_vec->first_rx_queue) ||
 	    (ring_nr >= (q_vec->first_rx_queue + q_vec->num_rx_queues))) {
@@ -365,9 +355,9 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	/* netmap_no_pendintr = 1, see netmap.c */
 	if (netmap_no_pendintr || force_update) {
 		/* Get number of received packets */
-		uint16_t slot_flags = kring->nkr_slot_flags;
+		u16 slot_flags = kring->nkr_slot_flags;
 		/* TBD :: remove CRC or not */
-		uint16_t strip_crc = (0) ? 4 : 0;
+		u32 strip_crc = (0) ? 4 : 0;
 
 		rx_done = mv_pp2x_rxq_received(adapter, rxq->id);
 		rx_done = (rx_done >= lim) ? lim - 1 : rx_done;
@@ -395,7 +385,6 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			slot->flags = slot_flags;
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
-
 		}
 		if (n) { /* update the state variables */
 			rxq->next_desc_to_proc = nic_i;
@@ -425,8 +414,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			void *addr = PNMB(na, slot, &paddr);
 
 			/*
-			In big endian mode:
-			we do not need to swap descriptor here, allready swapped before
+			* In big endian mode: we do not need to swap descriptor
+			* here, allready swapped before
 			*/
 
 			if (addr == NETMAP_BUF_BASE(na)) {   /* bad buf */
@@ -475,7 +464,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	struct netmap_adapter *na = NA(ifp);
 	struct netmap_slot *slot;
 	dma_addr_t paddr;
-	uint32_t *addr;
+	u32 *addr;
 	struct mv_pp2x_rx_queue *rxq;
 	u_int queue, idx, cell_id, bm_pool;
 	u_int added_buffers = 0;
@@ -499,9 +488,9 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 
 		for (i = 0; i < na->num_rx_desc; i++) {
 			si = netmap_idx_n2k(&na->rx_rings[queue], i);
-			addr = PNMB(na, slot+si, &paddr);
+			addr = PNMB(na, slot + si, &paddr);
 			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
-					    (u8 *)(uint64_t)(slot+si)->buf_idx);
+					  (u8 *)(uint64_t)(slot + si)->buf_idx);
 		}
 		added_buffers += i;
 		rxq->next_desc_to_proc = 0;
@@ -536,11 +525,12 @@ static int mv_pp2x_netmap_txq_init_buffers(struct SOFTC_T *adapter)
 }
 
 /* Update the mvpp2x-net device configurations. Number of queues can
- * change dinamically */
+ * change dinamically
+ */
 
 static int
 mv_pp2x_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
-						u_int *rxr, u_int *rxd)
+		      u_int *rxr, u_int *rxd)
 {
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
@@ -550,12 +540,12 @@ mv_pp2x_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 	*rxd = adapter->rx_ring_size;
 	*txd = adapter->tx_ring_size;
 
-        /*DBG_MSG("mvpp2x config txq=%d, txd=%d rxq=%d, rxd=%d",
-		*txr, *txd, *rxr, *rxd);*/
+	/*DBG_MSG("mvpp2x config txq=%d, txd=%d rxq=%d, rxd=%d",
+			  *txr, *txd, *rxr, *rxd);
+	*/
 
 	return 0;
 }
-
 
 static void
 mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
@@ -564,7 +554,7 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 
 	bzero(&na, sizeof(na));
 
-	if (ntmp_params == NULL)
+	if (!ntmp_params)
 		ntmp_params = kmalloc(sizeof(*ntmp_params), GFP_KERNEL);
 
 	na.ifp = adapter->dev; /* struct net_device */
@@ -578,6 +568,4 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 	na.num_rx_rings = adapter->num_rx_queues;
 	netmap_attach(&na);
 }
-/* end of file */
-
 #endif  /* __MV_PP2X_NETMAP_H__ */
