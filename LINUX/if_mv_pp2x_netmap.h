@@ -196,7 +196,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 
-	txq = adapter->txqs[ring_nr];
+	txq = adapter->txqs[ring_nr % adapter->num_tx_queues];
 	txq_pcpu = this_cpu_ptr(txq->pcpu);
 	aggr_txq = &adapter->priv->aggr_txqs[smp_processor_id()];
 	first_addr_space = adapter->priv->pp2_cfg.first_sw_thread;
@@ -221,9 +221,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			/* device-specific */
 			NM_CHECK_ADDR_LEN(na, addr, len);
 			slot->flags &= ~NS_REPORT;
-
-			dma_sync_single_for_cpu(ifp->dev.parent, paddr,
-				len, DMA_BIDIRECTIONAL);
 
 			/* check aggregated TXQ resource */
 			if (mv_pp2x_aggr_desc_num_check(adapter->priv,
@@ -293,12 +290,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	nic_i = ((tx_sent + nic_i) % kring->nkr_num_slots);
 	kring->nr_hwtail = netmap_idx_n2k(kring, nic_i);
 
-	/*DBG_MSG("hwcur %d, hwtail %d, head %d, tx_sent %d, nic_i: %d, ring_nr: %d\n",
-		  kring->nr_hwcur, kring->nr_hwtail, head,
-		  tx_sent, nic_i, ring_nr);
-	*/
 out:
-
 	return 0;
 }
 
@@ -324,34 +316,22 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
-	struct queue_vector *q_vec;
 	struct mv_pp2x_rx_queue *rxq;
 
 	if (!netif_carrier_ok(ifp))
 		return 0;
-
-	if (adapter->priv->pp2_cfg.queue_mode == MVPP2_QDIST_SINGLE_MODE)
-		q_vec = &adapter->q_vector[num_active_cpus()];
-	else
-		q_vec = &adapter->q_vector[smp_processor_id()];
-
-	if ((ring_nr < q_vec->first_rx_queue) ||
-	    (ring_nr >= (q_vec->first_rx_queue + q_vec->num_rx_queues))) {
-		return 0;
-	}
 
 	rxq = adapter->rxqs[ring_nr];
 
 	if (head > lim)
 		return netmap_ring_reinit(kring);
 
+	/* hardware memory barrier that prevents any memory read access from
+	*  being moved and executed on the other side of the barrier rmb();
+	*/
 	rmb();
 
-	/* hardware memory barrier that prevents any memory read access from
-	 *  being moved and executed on the other side of the barrier rmb();
-	 *
-	 * First part: import newly received packets into the netmap ring.
-	*/
+	/* First part: import newly received packets into the netmap ring */
 	/* netmap_no_pendintr = 1, see netmap.c */
 	if (netmap_no_pendintr || force_update) {
 		/* Get number of received packets */
@@ -413,26 +393,14 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 			void *addr = PNMB(na, slot, &paddr);
 
-			/*
-			* In big endian mode: we do not need to swap descriptor
-			* here, allready swapped before
-			*/
-
 			if (addr == NETMAP_BUF_BASE(na)) {   /* bad buf */
 				DBG_MSG("addr %p\n", addr);
 				goto ring_reset;
 			}
 
-			/*DBG_MSG("3 na %s slot %p, index %d, new_index %d, paddr %p\n",
-				na->name, slot, slot->buf_idx,
-				mv_pp22_rxdesc_cookie_get(curr),
-				paddr);*/
-
-			dma_sync_single_for_cpu(ifp->dev.parent,
-				paddr,
-				MVPP2_RX_BUF_SIZE(curr->data_size),
-				DMA_FROM_DEVICE);
-
+			/* In big endian mode: no need to swap descriptor here,
+			*  already swapped before
+			*/
 			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
 					    mv_pp22_rxdesc_cookie_get(curr));
 
@@ -444,10 +412,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = head;
-		wmb();
+		wmb(); /* synchronize writes to the NIC ring */
 		mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m);
-		/* enable interrupts */
-		mv_pp2x_qvector_interrupt_enable(q_vec);
 	}
 	return 0;
 
@@ -535,14 +501,10 @@ mv_pp2x_netmap_config(struct netmap_adapter *na, u_int *txr, u_int *txd,
 	struct ifnet *ifp = na->ifp;
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 
-	*txr = adapter->num_tx_queues;
+	*txr = adapter->num_tx_queues * num_active_cpus();
 	*rxr = adapter->num_rx_queues;
 	*rxd = adapter->rx_ring_size;
 	*txd = adapter->tx_ring_size;
-
-	/*DBG_MSG("mvpp2x config txq=%d, txd=%d rxq=%d, rxd=%d",
-			  *txr, *txd, *rxr, *rxd);
-	*/
 
 	return 0;
 }
@@ -564,7 +526,7 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_config = mv_pp2x_netmap_config;
 	na.nm_txsync = mv_pp2x_netmap_txsync;
 	na.nm_rxsync = mv_pp2x_netmap_rxsync;
-	na.num_tx_rings = adapter->num_tx_queues;
+	na.num_tx_rings = adapter->num_tx_queues * num_active_cpus();
 	na.num_rx_rings = adapter->num_rx_queues;
 	netmap_attach(&na);
 }
