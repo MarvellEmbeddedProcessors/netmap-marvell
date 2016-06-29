@@ -107,7 +107,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		 * Netmap releases buffers according to buf_idx, so
 		 * they need to be in place.
 		 */
-		for (queue = 0; queue < adapter->num_rx_queues;
+		for (queue = 0; queue < na->num_rx_rings;
 		     queue++) {
 			struct netmap_kring *kring =
 				&na->rx_rings[queue];
@@ -121,14 +121,14 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 				    ntmp_params->buf_idx[idx + queue].rx + i;
 			}
 		}
-		for (queue = 0; queue < adapter->num_tx_queues;
+		for (queue = 0; queue < na->num_tx_rings;
 		     queue++) {
 			struct netmap_kring *kring =
 				&na->tx_rings[queue];
 			struct netmap_ring *ring = kring->ring;
 			struct netmap_slot *slot = &ring->slot[0];
 
-			for (i = 0; i < na->num_rx_desc; i++) {
+			for (i = 0; i < na->num_tx_desc; i++) {
 				si = netmap_idx_n2k(
 					&na->tx_rings[queue], i);
 				(slot + si)->buf_idx =
@@ -143,7 +143,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		if (cell_params->active_if == 0) {
 			DBG_MSG("removig netmap BM pool %d from cell %d\n",
 				cell_params->bm_pool_num, cell_id);
-			for (rxq = 0; rxq < adapter->num_rx_queues; rxq++) {
+			for (rxq = 0; rxq < na->num_rx_rings; rxq++) {
 				mv_pp2x_swf_bm_pool_assign(adapter, rxq,
 						adapter->pool_long->id,
 						adapter->pool_short->id);
@@ -440,7 +440,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	      + adapter->id * MVPP2_MAX_RXQ;
 	bm_pool = ntmp_params->cell_params[cell_id].bm_pool_num;
 
-	for (queue = 0; queue < adapter->num_rx_queues; queue++) {
+	for (queue = 0; queue < na->num_rx_rings; queue++) {
 		rxq = adapter->rxqs[queue];
 
 		/* initialize the rx ring */
@@ -478,7 +478,7 @@ static int mv_pp2x_netmap_txq_init_buffers(struct SOFTC_T *adapter)
 	      MVPP2_MAX_PORTS * MVPP2_MAX_RXQ + adapter->id * MVPP2_MAX_RXQ;
 
 	/* initialize the tx ring */
-	for (queue = 0; queue < adapter->num_tx_queues; queue++) {
+	for (queue = 0; queue < na->num_tx_rings; queue++) {
 		txq = adapter->txqs[queue];
 		slot = netmap_reset(na, NR_TX, queue, 0);
 		if (!slot)
