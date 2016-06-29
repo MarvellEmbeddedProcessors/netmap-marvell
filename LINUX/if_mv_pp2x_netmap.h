@@ -86,7 +86,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		adapter->flags |= MVPP2_F_IFCAP_NETMAP;
 		cell_params->active_if++;
 		if (cell_params->bm_pool_num == 0) {
-			if (mv_pp2x_bm_pool_add(ifp->dev.parent,
+			if (mv_pp2x_bm_pool_ext_add(ifp->dev.parent,
 				adapter->priv, &pool,
 				MVPP2_BM_NETMAP_PKT_SIZE) != 0) {
 				DBG_MSG("Unable to allocate a new pool\n");
@@ -150,8 +150,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			}
 
 			mv_pp2x_bm_pool_destroy(ifp->dev.parent, adapter->priv,
-			    &adapter->priv->bm_pools[cell_params->bm_pool_num],
-			    false);
+			   &adapter->priv->bm_pools[cell_params->bm_pool_num]);
 			cell_params->bm_pool_num = 0;
 		}
 
