@@ -238,7 +238,7 @@ struct glob_arg {
 	int nthreads;
 	int cpus;	/* cpus used for running */
 	int system_cpus;	/* cpus on the system */
-
+	int ring;		/* ring to poll */
 	int options;	/* testing */
 #define OPT_PREFETCH	1
 #define OPT_ACCESS	2
@@ -1503,6 +1503,7 @@ usage(void)
 		"\t-b burst size		testing, mostly\n"
 		"\t-c cores		cores to use\n"
 		"\t-p threads		processes/threads to use\n"
+		"\t-q ring		specify which ring to use\n"
 		"\t-T report_ms		milliseconds between reports\n"
 		"\t-P			use libpcap instead of netmap\n"
 		"\t-w wait_for_link_time	in seconds\n"
@@ -1631,12 +1632,15 @@ main_thread(struct glob_arg *g)
 		pps = (x.pkts*1000000 + usec/2) / usec;
 		abs = (x.events > 0) ? (x.pkts / (double) x.events) : 0;
 
-		D("%spps (%spkts %sbps in %llu usec) %.2f avg_batch %d min_space",
-			norm(b1,pps),
-			norm(b2, (double)x.pkts),
-			norm(b3, (double)x.bytes*8),
-			(unsigned long long)usec,
-			abs, (int)cur.min_space);
+		if (pps) {
+			D("%spps pid %d (%spkts %sbps in %llu usec) %.2f avg_batch %d min_space",
+				norm(b1,pps),
+				getpid(),
+				norm(b2, (double)x.pkts),
+				norm(b3, (double)x.bytes*8),
+				(unsigned long long)usec,
+				abs, (int)cur.min_space);
+		}
 		prev = cur;
 		if (done == g->nthreads)
 			break;
@@ -1801,7 +1805,7 @@ main(int arc, char **argv)
 	g.virt_header = 0;
 
 	while ( (ch = getopt(arc, argv,
-			"a:f:F:n:i:Il:d:s:D:S:b:c:o:p:T:w:WvR:XC:H:e:E:m:rP:zZ")) != -1) {
+			"a:f:F:n:i:Il:d:s:D:S:b:c:o:p:q:T:w:WvR:XC:H:e:E:m:rP:zZ")) != -1) {
 		struct sf *fn;
 
 		switch(ch) {
@@ -1909,7 +1913,9 @@ main(int arc, char **argv)
 		case 'p':
 			g.nthreads = atoi(optarg);
 			break;
-
+		case 'q':
+			g.ring = atoi(optarg);
+			break;
 		case 'D': /* destination mac */
 			g.dst_mac.name = optarg;
 			break;
@@ -2044,7 +2050,21 @@ D("running on %d cpus (have %d)", g.cpus, i);
 	 * which in turn may take some time for the PHY to
 	 * reconfigure. We do the open here to have time to reset.
 	 */
-	g.nmd = nm_open(g.ifname, &base_nmd, 0, NULL);
+
+	if ((g.ring > 0) && (g.ring <= 4 )) {
+		D("%s - Opening only ring %d",g.ifname,	g.ring);
+		struct nm_desc desc;
+		memset(&desc,0,sizeof(desc));
+		desc.self = &desc;
+		desc.mem = NULL;
+		desc.req.nr_flags &= ~NR_REG_MASK;
+		desc.req.nr_flags |= NR_REG_ONE_NIC;
+		desc.req.nr_ringid = g.ring - 1;
+		g.nmd = nm_open(g.ifname, &base_nmd, NM_OPEN_QUEUE_CFG, &desc);
+	} else {
+		g.nmd = nm_open(g.ifname, &base_nmd, 0, NULL);
+	}
+
 	if (g.nmd == NULL) {
 		D("Unable to open %s: %s", g.ifname, strerror(errno));
 		goto out;

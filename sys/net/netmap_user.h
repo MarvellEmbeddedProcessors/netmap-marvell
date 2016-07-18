@@ -344,6 +344,7 @@ enum {
 	NM_OPEN_ARG2 =		0x200000,
 	NM_OPEN_ARG3 =		0x400000,
 	NM_OPEN_RING_CFG =	0x800000, /* tx|rx rings|slots */
+	NM_OPEN_QUEUE_CFG =	0x1000000, /* Set ringid */
 };
 
 
@@ -780,6 +781,11 @@ nm_open(const char *ifname, const struct nmreq *req,
 			d->req.nr_ringid = parent->req.nr_ringid;
 			d->req.nr_flags = parent->req.nr_flags;
 		}
+		if (new_flags & NM_OPEN_QUEUE_CFG) {
+			D("Setting ringid %d", parent->req.nr_ringid);
+			d->req.nr_ringid = parent->req.nr_ringid;
+			d->req.nr_flags = parent->req.nr_flags;
+		}
 	}
 	/* add the *XPOLL flags */
 	d->req.nr_ringid |= new_flags & (NETMAP_NO_TX_POLL | NETMAP_DO_RX_POLL);
@@ -822,6 +828,10 @@ nm_open(const char *ifname, const struct nmreq *req,
 #ifdef DEBUG_NETMAP_USER
     { /* debugging code */
 	int i;
+
+	ND("ifname %s ringid 0x%x flags 0x%x, nr_reg 0x%x",
+		d->req.nr_name, d->req.nr_ringid,
+		d->req.nr_flags, nr_reg);
 
 	D("%s tx %d .. %d %d rx %d .. %d %d", ifname,
 		d->first_tx_ring, d->last_tx_ring, d->req.nr_tx_rings,
