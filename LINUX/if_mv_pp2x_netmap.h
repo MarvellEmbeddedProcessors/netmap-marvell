@@ -71,7 +71,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	mv_pp2x_stop(adapter->dev);
 
-	DBG_MSG("%s: stopping interface\n", ifp->name);
+	pr_info("%s: stopping interface\n", ifp->name);
 
 	cell_id = adapter->priv->pp2_cfg.cell_index;
 	cell_params = &ntmp_params->cell_params[cell_id];
@@ -80,7 +80,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (onoff) {
 		u_int pool;
 
-		DBG_MSG("Netmap started\n");
+		pr_info("Netmap started\n");
 
 		nm_set_native_flags(na);
 		adapter->flags |= MVPP2_F_IFCAP_NETMAP;
@@ -89,7 +89,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			if (mv_pp2x_bm_pool_ext_add(ifp->dev.parent,
 				adapter->priv, &pool,
 				MVPP2_BM_NETMAP_PKT_SIZE) != 0) {
-				DBG_MSG("Unable to allocate a new pool\n");
+				pr_err("Unable to allocate a new pool\n");
 				return -EINVAL;
 			}
 			cell_params->bm_pool_num = pool;
@@ -97,7 +97,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	} else {
 		u_int i, idx;
 
-		DBG_MSG("Netmap stop\n");
+		pr_info("Netmap stop\n");
 
 		nm_clear_native_flags(na);
 
@@ -137,11 +137,11 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		}
 
 		if (--cell_params->active_if < 0) {
-			DBG_MSG("Error in active interfaces\n");
+			pr_err("Error in active interfaces\n");
 			return -EINVAL;
 		}
 		if (cell_params->active_if == 0) {
-			DBG_MSG("removig netmap BM pool %d from cell %d\n",
+			pr_info("removig netmap BM pool %d from cell %d\n",
 				cell_params->bm_pool_num, cell_id);
 			for (rxq = 0; rxq < na->num_rx_rings; rxq++) {
 				mv_pp2x_swf_bm_pool_assign(adapter, rxq,
@@ -159,7 +159,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 
 	if (netif_running(adapter->dev)) {
 		mv_pp2x_open(adapter->dev);
-		DBG_MSG("%s: starting interface\n", ifp->name);
+		pr_info("%s: starting interface\n", ifp->name);
 	}
 	return 0;
 }
@@ -281,7 +281,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	txq_pcpu->count -= tx_sent;
 
 	if (tx_sent >= kring->nkr_num_slots) {
-		DBG_MSG("tx_sent: %d, nkr_num_slots: %d\n", tx_sent,
+		pr_warn("tx_sent: %d, nkr_num_slots: %d\n", tx_sent,
 			kring->nkr_num_slots);
 		tx_sent = tx_sent % kring->nkr_num_slots;
 	}
@@ -393,7 +393,6 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			void *addr = PNMB(na, slot, &paddr);
 
 			if (addr == NETMAP_BUF_BASE(na)) {   /* bad buf */
-				DBG_MSG("addr %p\n", addr);
 				goto ring_reset;
 			}
 
