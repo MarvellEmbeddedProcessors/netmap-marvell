@@ -386,8 +386,6 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 		for (m = 0; nm_i != head; m++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
-			struct mv_pp2x_rx_desc *curr =
-				MVPP2_QUEUE_DESC_PTR(rxq, nic_i);
 			dma_addr_t paddr;
 
 			void *addr = PNMB(na, slot, &paddr);
@@ -400,12 +398,11 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			*  already swapped before
 			*/
 			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
-					    mv_pp22_rxdesc_cookie_get(curr));
+					    (u8 *)(uintptr_t)slot->buf_idx);
 
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
 
-			curr->status = 0;
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
