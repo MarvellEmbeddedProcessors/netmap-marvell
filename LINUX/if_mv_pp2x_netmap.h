@@ -114,11 +114,14 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			struct netmap_ring *ring = kring->ring;
 			struct netmap_slot *slot = &ring->slot[0];
 
-			for (i = 0; i < na->num_rx_desc; i++) {
-				si = netmap_idx_n2k(
-					&na->rx_rings[queue], i);
-				(slot + si)->buf_idx =
-				    ntmp_params->buf_idx[idx + queue].rx + i;
+			if (ntmp_params->buf_idx[idx + queue].rx != 0){
+				for (i = 0; i < na->num_rx_desc; i++) {
+					si = netmap_idx_n2k(
+						&na->rx_rings[queue], i);
+					(slot + si)->buf_idx =
+					    ntmp_params->buf_idx[idx + queue].rx + i;
+				}
+				ntmp_params->buf_idx[idx + queue].rx = 0;
 			}
 		}
 		for (queue = 0; queue < na->num_tx_rings;
@@ -128,11 +131,14 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			struct netmap_ring *ring = kring->ring;
 			struct netmap_slot *slot = &ring->slot[0];
 
-			for (i = 0; i < na->num_tx_desc; i++) {
-				si = netmap_idx_n2k(
-					&na->tx_rings[queue], i);
-				(slot + si)->buf_idx =
-				    ntmp_params->buf_idx[idx + queue].tx + i;
+			if (ntmp_params->buf_idx[idx + queue].tx != 0){
+				for (i = 0; i < na->num_tx_desc; i++) {
+					si = netmap_idx_n2k(
+						&na->tx_rings[queue], i);
+					(slot + si)->buf_idx =
+					    ntmp_params->buf_idx[idx + queue].tx + i;
+				}
+				ntmp_params->buf_idx[idx + queue].tx = 0;
 			}
 		}
 
