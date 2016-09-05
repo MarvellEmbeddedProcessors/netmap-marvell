@@ -339,6 +339,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	/* First part: import newly received packets into the netmap ring */
 	/* netmap_no_pendintr = 1, see netmap.c */
 	if (netmap_no_pendintr || force_update) {
+		struct mv_pp2x_rx_desc *curr;
+		struct netmap_slot *slot;
 		/* Get number of received packets */
 		u16 slot_flags = kring->nkr_slot_flags;
 		/* TBD :: remove CRC or not */
@@ -350,9 +352,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		nm_i = netmap_idx_n2k(kring, nic_i);
 
 		for (n = 0; n < rx_done; n++) {
-			struct mv_pp2x_rx_desc *curr =
-				MVPP2_QUEUE_DESC_PTR(rxq, nic_i);
-			struct netmap_slot *slot = &ring->slot[nm_i];
+			if (unlikely(nm_next(nm_i, lim) == kring->nr_hwcur)) break;
+			curr = MVPP2_QUEUE_DESC_PTR(rxq, nic_i);
 
 #if defined(__BIG_ENDIAN)
 			if (adapter->priv->pp2_version == PPV21)
@@ -362,6 +363,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 #endif /* __BIG_ENDIAN */
 
 			/* TBD : check for ERRORs */
+			slot = &ring->slot[nm_i];
 			slot->len = (curr->data_size) -
 				    strip_crc - MVPP2_MH_SIZE;
 			slot->data_offs = NET_SKB_PAD + MVPP2_MH_SIZE;
@@ -405,6 +407,9 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			*/
 			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
 					    (u8 *)(uintptr_t)slot->buf_idx);
+
+			/* mark this slot as invalid */
+			slot->buf_idx = 0;
 
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
