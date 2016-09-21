@@ -189,7 +189,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int nic_i = 0; /* Number of sent packets from NIC  */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int count = 0, sent = 0;
+	u_int count = 0;
 	u_int const head = kring->rhead;
 	struct mv_pp2x_tx_desc *tx_desc;
 	struct mv_pp2x_aggr_tx_queue *aggr_txq = NULL;
@@ -271,7 +271,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			if (++count >= (aggr_txq->size >> 2)) {
 				wmb(); /* synchronize writes to the NIC ring */
 				mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-				sent += count;
 				aggr_txq->count += count;
 				count = 0;
 			}
@@ -286,7 +285,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 		if (count > 0) {
 			wmb(); /* synchronize writes to the NIC ring */
 			mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-			sent += count;
 			aggr_txq->count += count;
 		}
 		kring->nr_hwcur = head; /* the saved ring->cur */
