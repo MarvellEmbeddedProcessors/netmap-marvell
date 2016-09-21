@@ -30,6 +30,11 @@
 #define MVPP2_NETMAP_MAX_QUEUES_NUM	(MVPP2_MAX_CELLS * MVPP2_MAX_PORTS * \
 					MVPP2_MAX_RXQ)
 
+#define MVPP2_NETMAP_TXD_L3INFO_SHIFT		26
+#define MVPP2_NETMAP_TXD_L4INFO_SHIFT		24
+#define MVPP2_NETMAP_TXD_L3_CSUM_EN_SHIFT	14
+#define MVPP2_NETMAP_TXD_L4_CSUM_EN_SHIFT	13
+
 struct mvpp2_ntmp_buf_idx {
 	int rx;
 	int tx;
@@ -244,9 +249,18 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			tx_desc->data_size = len;
 			tx_desc->packet_offset = slot->data_offs;
 
-			tx_desc->command = MVPP2_TXD_L4_CSUM_NOT |
-				MVPP2_TXD_IP_CSUM_DISABLE | MVPP2_TXD_F_DESC |
-				 MVPP2_TXD_L_DESC;
+			if (slot->csum_offload.l3_offset) {
+				tx_desc->command = (slot->csum_offload.l3_offset << MVPP2_TXD_L3_OFF_SHIFT) |
+						   (slot->csum_offload.ip_hdr_len << MVPP2_TXD_IP_HLEN_SHIFT) |
+						   ((slot->csum_offload.l3_type & 0x1) << MVPP2_NETMAP_TXD_L3INFO_SHIFT) |
+						   ((~slot->csum_offload.l3_type & 0x2) << MVPP2_NETMAP_TXD_L3_CSUM_EN_SHIFT) |
+						   ((slot->csum_offload.l4_type & 0x1) << MVPP2_NETMAP_TXD_L4INFO_SHIFT) |
+						   ((~slot->csum_offload.l3_type & 0x2) << MVPP2_NETMAP_TXD_L4_CSUM_EN_SHIFT) |
+						   MVPP2_TXD_F_DESC | MVPP2_TXD_L_DESC;
+			} else
+				tx_desc->command = MVPP2_TXD_L4_CSUM_NOT |
+					MVPP2_TXD_IP_CSUM_DISABLE | MVPP2_TXD_F_DESC |
+					MVPP2_TXD_L_DESC;
 
 			mv_pp2x_txq_inc_put(adapter->priv->pp2_version,
 					    txq_pcpu, addr, tx_desc);

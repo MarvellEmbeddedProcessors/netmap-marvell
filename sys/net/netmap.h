@@ -139,15 +139,23 @@
  *	netmap:foo}k			PIPE ring pair k, slave side
  */
 
+struct csum_offload_params {
+	uint8_t l4_type;	/* 2 - TCP,  3 - UDP*/
+	uint8_t l3_type;	/* 2 - IPv4, 3 - IPv6*/
+	uint8_t ip_hdr_len;	/* ip header length for csum offload */
+	uint8_t l3_offset;	/* l3 offset for csum offload */
+};
+
 /*
  * struct netmap_slot is a buffer descriptor
  */
 struct netmap_slot {
 	uint32_t buf_idx;	/* buffer index */
 	uint16_t len;		/* length for this slot */
+	uint16_t data_offs;	/* offset to data start point in the buffer- marvell*/
+	struct csum_offload_params	csum_offload; /* checksum offload params - marvell*/
+	uint16_t reserved;	/* marvell */
 	uint16_t flags;		/* buf changed, etc. */
-	uint16_t data_offs; /* offset to data start point in the buffer- marvell*/
-	uint16_t reserved;  /* marvell */
 	uint64_t ptr;		/* pointer for indirect buffers */
 };
 
