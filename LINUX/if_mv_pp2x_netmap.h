@@ -389,7 +389,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		if (n) { /* update the state variables */
 			rxq->next_desc_to_proc = nic_i;
 			kring->nr_hwtail = nm_i;
-			mv_pp2x_rxq_status_update(adapter, rxq->id, n, 0);
+			mv_pp2x_rxq_status_update(adapter, rxq->id, n, n);
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
@@ -430,7 +430,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			nic_i = nm_next(nic_i, lim);
 		}
 		kring->nr_hwcur = head;
-		mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m);
+		/*mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m)*/;
 	}
 	return 0;
 
