@@ -197,6 +197,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct mv_pp2x_tx_queue *txq;
 	u_int tx_sent;
 	u8 first_addr_space;
+	int cpu = smp_processor_id();
 
 	/* generate an interrupt approximately every half ring */
 	/*u_int report_frequency = kring->nkr_num_slots >> 1;*/
@@ -208,7 +209,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 
 	txq = adapter->txqs[ring_nr % adapter->num_tx_queues];
 	txq_pcpu = this_cpu_ptr(txq->pcpu);
-	aggr_txq = &adapter->priv->aggr_txqs[smp_processor_id()];
+	aggr_txq = &adapter->priv->aggr_txqs[cpu];
 	first_addr_space = adapter->priv->pp2_cfg.first_sw_thread;
 
 	/*
@@ -234,9 +235,9 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 
 			/* check aggregated TXQ resource */
 			if (mv_pp2x_aggr_desc_num_check(adapter->priv,
-			    aggr_txq, 1) ||
+			    aggr_txq, 1, cpu) ||
 			    mv_pp2x_txq_reserved_desc_num_proc(
-			    adapter->priv, txq, txq_pcpu, 1)) {
+			    adapter->priv, txq, txq_pcpu, 1, cpu)) {
 				/*return netmap_ring_reinit(kring);*/
 				continue;
 			}
