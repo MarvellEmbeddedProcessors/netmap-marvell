@@ -416,7 +416,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			/* In big endian mode: no need to swap descriptor here,
 			*  already swapped before
 			*/
-			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
+			mv_pp2x_pool_refill_virtual(adapter->priv, bm_pool, paddr,
 					    (u8 *)(uintptr_t)slot->buf_idx);
 
 			/* mark this slot as invalid */
@@ -485,7 +485,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 		for (i = 0; i < na->num_rx_desc; i++) {
 			si = netmap_idx_n2k(&na->rx_rings[queue], i);
 			addr = PNMB(na, slot + si, &paddr);
-			mv_pp2x_pool_refill(adapter->priv, bm_pool, paddr,
+			mv_pp2x_pool_refill_virtual(adapter->priv, bm_pool, paddr,
 					  (u8 *)(uint64_t)(slot + si)->buf_idx);
 			bm_pool_netmap->buf_num++;
 			if (bm_pool_netmap->buf_num >= MVPP2_BM_POOL_SIZE_MAX){
