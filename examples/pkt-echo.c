@@ -881,7 +881,7 @@ int main(int argc, char **argv)
 				if (local_mask & (1<<j))
 					break;
 			saved_desc.self = &saved_desc;
-			saved_desc.mem = NULL;
+			/*saved_desc.mem = NULL*/;
 			nm_close(g.nmds[1]);
 			saved_desc.req.nr_flags &= ~NR_REG_MASK;
 			saved_desc.req.nr_flags |= NR_REG_ONE_NIC;
