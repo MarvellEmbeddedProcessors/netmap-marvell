@@ -198,6 +198,8 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int tx_sent;
 	u8 first_addr_space;
 	int cpu = smp_processor_id();
+	u_int num_cpus = num_active_cpus();
+	u_int rsv_chunk;
 
 	/* generate an interrupt approximately every half ring */
 	/*u_int report_frequency = kring->nkr_num_slots >> 1;*/
@@ -211,6 +213,10 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	txq_pcpu = this_cpu_ptr(txq->pcpu);
 	aggr_txq = &adapter->priv->aggr_txqs[cpu];
 	first_addr_space = adapter->priv->pp2_cfg.first_sw_thread;
+
+	rsv_chunk = (num_cpus > 2) ?
+		    (txq_pcpu->size >> 2) -1 :
+		    (txq_pcpu->size >> (num_cpus >> 1)) -1;
 
 	/*
 	 * Process new packets to send. j is the current index in the
@@ -234,12 +240,16 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			slot->flags &= ~NS_REPORT;
 
 			/* check aggregated TXQ resource */
-			if (mv_pp2x_aggr_desc_num_check(adapter->priv,
-			    aggr_txq, 1, cpu) ||
-			    mv_pp2x_txq_reserved_desc_num_proc(
-			    adapter->priv, txq, txq_pcpu, 1, cpu)) {
-				/*return netmap_ring_reinit(kring);*/
-				continue;
+			if (unlikely((aggr_txq->count + 1) > aggr_txq->size)) {
+				if (mv_pp2x_aggr_desc_num_check(adapter->priv, aggr_txq, 1, cpu))
+					break;
+			}
+
+			if (unlikely(txq_pcpu->reserved_num == 0)){
+				txq_pcpu->reserved_num += mv_pp2x_txq_alloc_reserved_desc(adapter->priv,
+							  txq, rsv_chunk, cpu);
+				if (txq_pcpu->reserved_num == 0)
+					break;
 			}
 
 			tx_desc = mv_pp2x_txq_next_desc_get(aggr_txq);
