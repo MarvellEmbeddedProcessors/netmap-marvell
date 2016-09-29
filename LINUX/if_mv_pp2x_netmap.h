@@ -197,9 +197,9 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct mv_pp2x_tx_queue *txq;
 	u_int tx_sent;
 	u8 first_addr_space;
-	int cpu = smp_processor_id();
 	u_int num_cpus = num_active_cpus();
 	u_int rsv_chunk;
+	int cpu = get_cpu();
 
 	/* generate an interrupt approximately every half ring */
 	/*u_int report_frequency = kring->nkr_num_slots >> 1;*/
@@ -300,6 +300,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 		}
 		kring->nr_hwcur = head; /* the saved ring->cur */
 	}
+	put_cpu();
 
 	/*
 	 * Second part: reclaim buffers for completed transmissions.
