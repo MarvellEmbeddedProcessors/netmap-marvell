@@ -411,6 +411,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	nm_i  = kring->nr_hwcur; /* netmap ring index */
 
 	if (nm_i != head) { /* userspace has released some packets. */
+		int cpu = get_cpu();
+
 		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC ring index */
 		cell_id = adapter->priv->pp2_cfg.cell_index;
 		bm_pool = ntmp_params->cell_params[cell_id].bm_pool_num;
@@ -428,9 +430,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			/* In big endian mode: no need to swap descriptor here,
 			*  already swapped before
 			*/
-			mv_pp2x_pool_refill_virtual(adapter->priv, bm_pool, paddr,
-					    (u8 *)(uintptr_t)slot->buf_idx);
-
+			mv_pp2x_bm_pool_put_virtual(&adapter->priv->hw, bm_pool, paddr,
+					    (u8 *)(uintptr_t)slot->buf_idx, cpu);
 			/* mark this slot as invalid */
 			slot->buf_idx = 0;
 
@@ -440,6 +441,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
+		put_cpu();
 		kring->nr_hwcur = head;
 		/*mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m)*/;
 	}
@@ -464,6 +466,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	u_int i = 0, si;
 	struct mv_pp2x_bm_pool *bm_pool_netmap;
 	struct netmap_kring *kring;
+	int cpu;
 
 	cell_id = adapter->priv->pp2_cfg.cell_index;
 	idx = cell_id * MVPP2_MAX_PORTS * MVPP2_MAX_RXQ
@@ -493,12 +496,12 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 
 		ntmp_params->buf_idx[idx + queue].rx = slot->buf_idx;
 		mv_pp2x_swf_bm_pool_assign(adapter, queue, bm_pool, bm_pool);
-
+		cpu = get_cpu();
 		for (i = 0; i < na->num_rx_desc; i++) {
 			si = netmap_idx_n2k(&na->rx_rings[queue], i);
 			addr = PNMB(na, slot + si, &paddr);
-			mv_pp2x_pool_refill_virtual(adapter->priv, bm_pool, paddr,
-					  (u8 *)(uint64_t)(slot + si)->buf_idx);
+			mv_pp2x_bm_pool_put_virtual(&adapter->priv->hw, bm_pool, paddr,
+					    (u8 *)(uint64_t)(slot + si)->buf_idx, cpu);
 			bm_pool_netmap->buf_num++;
 			if (bm_pool_netmap->buf_num >= MVPP2_BM_POOL_SIZE_MAX){
 				pr_info("Max size of BM pool reached %d\n",
@@ -506,6 +509,7 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 				break;
 			}
 		}
+		put_cpu();
 		pr_debug("rx queue %d, buf_idx[%d].rx %d, new ring %p, BM pool buffers %d\n",
 			queue, idx + queue,
 			ntmp_params->buf_idx[idx + queue].rx, (void *)kring,
