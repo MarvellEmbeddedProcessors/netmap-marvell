@@ -14,6 +14,7 @@
 #include <net/netmap_user.h>
 #include <sys/poll.h>
 
+#define BUSY_WAIT
 int verbose = 0;
 
 static int do_abort = 0;
@@ -258,7 +259,11 @@ main(int argc, char **argv)
 	D("Ready to go, %s 0x%x/%d <-> %s 0x%x/%d.",
 		pa->req.nr_name, pa->first_rx_ring, pa->req.nr_rx_rings,
 		pb->req.nr_name, pb->first_rx_ring, pb->req.nr_rx_rings);
-
+#if defined(_WIN32) || defined(BUSY_WAIT)
+	D("Running in BUSYWAIT mode");
+#else
+	D("Running in POLL mode");
+#endif
 	/* main loop */
 	signal(SIGINT, sigint_h);
 	while (!do_abort) {
@@ -268,9 +273,8 @@ main(int argc, char **argv)
 		n0 = pkt_queued(pa, 0);
 		if (!loopback)
 			n1 = pkt_queued(pb, 0);
-#if defined(_WIN32) || defined(BUSYWAIT)
+#if defined(_WIN32) || defined(BUSY_WAIT)
 		if (n0){
-			ioctl(pollfd[1].fd, NIOCTXSYNC, NULL);
 			pollfd[1].revents = POLLOUT;
 		}
 		else {
@@ -278,7 +282,6 @@ main(int argc, char **argv)
 		}
 		if (!loopback) {
 			if (n1){
-				ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
 				pollfd[0].revents = POLLOUT;
 			}
 			else {
@@ -328,11 +331,13 @@ main(int argc, char **argv)
 		}
 		if (pollfd[0].revents & POLLOUT) {
 			move(pb, pa, burst);
+			ioctl(pollfd[1].fd, NIOCTXSYNC, NULL);
 			// XXX we don't need the ioctl */
 			// ioctl(me[0].fd, NIOCTXSYNC, NULL);
 		}
 		if (pollfd[1].revents & POLLOUT) {
 			move(pa, pb, burst);
+			ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
 			// XXX we don't need the ioctl */
 			// ioctl(me[1].fd, NIOCTXSYNC, NULL);
 		}

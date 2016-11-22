@@ -401,7 +401,6 @@ static void * main_loop_lb_thread(void *data)
 		tmp = pkt_queued(targ->nmds[0], 0);
 #if defined(_WIN32) || defined(BUSY_WAIT)
 		if (tmp){
-			ioctl(targ->pollfds[0].fd, NIOCTXSYNC, NULL);
 			targ->pollfds[0].revents = POLLOUT;
 		}
 		else {
@@ -434,8 +433,10 @@ static void * main_loop_lb_thread(void *data)
 			D("error on fd0, rx [%d,%d,%d)",
 				rx->head, rx->cur, rx->tail);
 		}
-		if (targ->pollfds[0].revents & POLLOUT)
+		if (targ->pollfds[0].revents & POLLOUT) {
 			move(targ->nmds[0], targ->nmds[0], targ);
+			ioctl(targ->pollfds[0].fd, NIOCTXSYNC, NULL);
+		}
 	}
 
 	targ->completed = 1;
@@ -462,14 +463,12 @@ static void * main_loop_thread(void *data)
 		n1 = pkt_queued(targ->nmds[1], 0);
 #if defined(_WIN32) || defined(BUSY_WAIT)
 		if (n0){
-			ioctl(targ->pollfds[1].fd, NIOCTXSYNC, NULL);
 			targ->pollfds[1].revents = POLLOUT;
 		}
 		else {
 			ioctl(targ->pollfds[0].fd, NIOCRXSYNC, NULL);
 		}
 		if (n1){
-			ioctl(targ->pollfds[0].fd, NIOCTXSYNC, NULL);
 			targ->pollfds[0].revents = POLLOUT;
 		}
 		else {
@@ -518,10 +517,14 @@ static void * main_loop_thread(void *data)
 			D("error on fd1, rx [%d,%d,%d)",
 				rx->head, rx->cur, rx->tail);
 		}
-		if (targ->pollfds[0].revents & POLLOUT)
+		if (targ->pollfds[0].revents & POLLOUT) {
 			move(targ->nmds[1], targ->nmds[0], targ);
-		if (targ->pollfds[1].revents & POLLOUT)
+			ioctl(targ->pollfds[0].fd, NIOCTXSYNC, NULL);
+		}
+		if (targ->pollfds[1].revents & POLLOUT) {
 			move(targ->nmds[0], targ->nmds[1], targ);
+			ioctl(targ->pollfds[1].fd, NIOCTXSYNC, NULL);
+		}
 	}
 
 	targ->completed = 1;
