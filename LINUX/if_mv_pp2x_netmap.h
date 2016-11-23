@@ -355,6 +355,9 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	if (head > lim)
 		return netmap_ring_reinit(kring);
 
+	cell_id = adapter->priv->pp2_cfg.cell_index;
+	bm_pool = ntmp_params->cell_params[cell_id].bm_pool_num;
+
 	/* hardware memory barrier that prevents any memory read access from
 	*  being moved and executed on the other side of the barrier rmb();
 	*/
@@ -373,7 +376,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		rx_done = mv_pp2x_rxq_received(adapter, rxq->id);
 		rx_done = (rx_done >= lim) ? lim - 1 : rx_done;
 		nic_i = rxq->next_desc_to_proc;
-		nm_i = netmap_idx_n2k(kring, nic_i);
+		nm_i = kring->nr_hwtail;
 
 		for (n = 0; n < rx_done; n++) {
 			if (unlikely(nm_next(nm_i, lim) == kring->nr_hwcur)) break;
@@ -387,6 +390,15 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 #endif /* __BIG_ENDIAN */
 
 			/* TBD : check for ERRORs */
+			if (unlikely(curr->status & MVPP2_RXD_ERR_SUMMARY)) {
+				dma_addr_t paddr = mv_pp22_rxdesc_phys_addr_get(curr);
+				mv_pp2x_bm_pool_put_virtual(&adapter->priv->hw, bm_pool, paddr,
+						mv_pp22_rxdesc_cookie_get(curr), get_cpu());
+				nic_i = nm_next(nic_i, lim);
+				put_cpu();
+				continue;
+			}
+
 			slot = &ring->slot[nm_i];
 			slot->len = (curr->data_size) -
 				    strip_crc - MVPP2_MH_SIZE;
@@ -414,9 +426,6 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		int cpu = get_cpu();
 
 		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC ring index */
-		cell_id = adapter->priv->pp2_cfg.cell_index;
-		bm_pool = ntmp_params->cell_params[cell_id].bm_pool_num;
-
 		for (m = 0; nm_i != head; m++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			dma_addr_t paddr;
