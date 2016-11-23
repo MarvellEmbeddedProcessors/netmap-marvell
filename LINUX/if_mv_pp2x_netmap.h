@@ -190,6 +190,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int count = 0;
+	u_int tx_count = 0, tx_bytes = 0;
 	u_int const head = kring->rhead;
 	struct mv_pp2x_tx_desc *tx_desc;
 	struct mv_pp2x_aggr_tx_queue *aggr_txq = NULL;
@@ -285,6 +286,8 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 				aggr_txq->count += count;
 				count = 0;
 			}
+			tx_bytes += len;
+			tx_count++;
 
 			if (slot->flags & NS_BUF_CHANGED)
 				slot->flags &= ~NS_BUF_CHANGED;
@@ -297,6 +300,14 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			wmb(); /* synchronize writes to the NIC ring */
 			mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
 			aggr_txq->count += count;
+		}
+		/* Update tx counters */
+		if (tx_count) {
+			struct mv_pp2x_pcpu_stats *stats = this_cpu_ptr(adapter->stats);
+			u64_stats_update_begin(&stats->syncp);
+			stats->tx_packets += tx_count;
+			stats->tx_bytes += tx_bytes;
+			u64_stats_update_end(&stats->syncp);
 		}
 		kring->nr_hwcur = head; /* the saved ring->cur */
 	}
@@ -336,6 +347,7 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int nm_i;	/* index into the netmap ring */
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n = 0, m = 0;
+	u_int rx_count = 0, rx_bytes = 0;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags &
@@ -346,6 +358,8 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	/* device-specific */
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct mv_pp2x_rx_queue *rxq;
+	struct mv_pp2x_pcpu_stats *stats;
+	int cpu;
 
 	if (!netif_carrier_ok(ifp))
 		return 0;
@@ -357,6 +371,9 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 	cell_id = adapter->priv->pp2_cfg.cell_index;
 	bm_pool = ntmp_params->cell_params[cell_id].bm_pool_num;
+
+	cpu = get_cpu();
+	stats = this_cpu_ptr(adapter->stats);
 
 	/* hardware memory barrier that prevents any memory read access from
 	*  being moved and executed on the other side of the barrier rmb();
@@ -393,9 +410,12 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			if (unlikely(curr->status & MVPP2_RXD_ERR_SUMMARY)) {
 				dma_addr_t paddr = mv_pp22_rxdesc_phys_addr_get(curr);
 				mv_pp2x_bm_pool_put_virtual(&adapter->priv->hw, bm_pool, paddr,
-						mv_pp22_rxdesc_cookie_get(curr), get_cpu());
+						mv_pp22_rxdesc_cookie_get(curr), cpu);
 				nic_i = nm_next(nic_i, lim);
-				put_cpu();
+				/* update rx error counters */
+				u64_stats_update_begin(&stats->syncp);
+				adapter->dev->stats.rx_errors++;
+				u64_stats_update_end(&stats->syncp);
 				continue;
 			}
 
@@ -408,11 +428,19 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			slot->flags = slot_flags;
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
+			rx_count++;
+			rx_bytes += slot->len;
 		}
-		if (n) { /* update the state variables */
+		if (n) { /* update the state variables and rx counters */
+
 			rxq->next_desc_to_proc = nic_i;
 			kring->nr_hwtail = nm_i;
 			mv_pp2x_rxq_status_update(adapter, rxq->id, n, n);
+
+			u64_stats_update_begin(&stats->syncp);
+			stats->rx_packets += rx_count;
+			stats->rx_bytes += rx_bytes;
+			u64_stats_update_end(&stats->syncp);
 		}
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
@@ -423,8 +451,6 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 	nm_i  = kring->nr_hwcur; /* netmap ring index */
 
 	if (nm_i != head) { /* userspace has released some packets. */
-		int cpu = get_cpu();
-
 		nic_i = netmap_idx_k2n(kring, nm_i); /* NIC ring index */
 		for (m = 0; nm_i != head; m++) {
 			struct netmap_slot *slot = &ring->slot[nm_i];
@@ -450,10 +476,10 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 			nm_i = nm_next(nm_i, lim);
 			nic_i = nm_next(nic_i, lim);
 		}
-		put_cpu();
 		kring->nr_hwcur = head;
 		/*mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m)*/;
 	}
+	put_cpu();
 	return 0;
 
 ring_reset:
