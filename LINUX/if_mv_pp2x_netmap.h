@@ -311,7 +311,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 		}
 		kring->nr_hwcur = head; /* the saved ring->cur */
 	}
-	put_cpu();
 
 	/*
 	 * Second part: reclaim buffers for completed transmissions.
@@ -331,6 +330,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	kring->nr_hwtail = netmap_idx_n2k(kring, nic_i);
 
 out:
+	put_cpu();
 	return 0;
 }
 
