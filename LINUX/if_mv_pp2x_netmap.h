@@ -512,6 +512,13 @@ static int mv_pp2x_netmap_rxq_init_buffers(struct SOFTC_T *adapter)
 	pr_debug("Cell ID: %d, Port %d\n", cell_id, adapter->id);
 	pr_debug("--------------------\n");
 
+	for_each_online_cpu(cpu) {
+		/* Reset the BM virtual and physical address high register
+		  (not in use in netmap) */
+		mv_pp2x_relaxed_write(&adapter->priv->hw, MVPP22_BM_PHY_VIRT_HIGH_RLS_REG,
+				0, cpu);
+	}
+
 	for (queue = 0; queue < na->num_rx_rings; queue++) {
 		rxq = adapter->rxqs[queue];
 
