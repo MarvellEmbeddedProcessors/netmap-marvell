@@ -139,6 +139,16 @@
  *	netmap:foo}k			PIPE ring pair k, slave side
  */
 
+enum {
+	CSUM_OFFLOAD_L4_TYPE_TCP =	2,
+	CSUM_OFFLOAD_L4_TYPE_UDP =	3,
+};
+
+enum {
+	CSUM_OFFLOAD_L3_TYPE_IPV4 =	2,
+	CSUM_OFFLOAD_L3_TYPE_IPV6 =	3,
+};
+
 struct csum_offload_params {
 	uint8_t l4_type;	/* 2 - TCP,  3 - UDP*/
 	uint8_t l3_type;	/* 2 - IPv4, 3 - IPv6*/
