@@ -1,10 +1,13 @@
 /*
  * (C) 2011-2014 Luigi Rizzo, Matteo Landi
+ * (c) 2016, Marvell International Ltd.
  *
  * BSD license
  *
  * A netmap client to bridge two network interfaces
  * (or one interface and the host stack).
+ *
+ * code modified by Marvell from pkt-gen and bridge applications
  *
  * $FreeBSD: head/tools/tools/netmap/bridge.c 228975 2011-12-30 00:04:11Z uqs $
  */
