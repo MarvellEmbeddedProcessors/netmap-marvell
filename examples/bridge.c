@@ -331,13 +331,13 @@ main(int argc, char **argv)
 		}
 		if (pollfd[0].revents & POLLOUT) {
 			move(pb, pa, burst);
-			ioctl(pollfd[1].fd, NIOCTXSYNC, NULL);
+			ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
 			// XXX we don't need the ioctl */
 			// ioctl(me[0].fd, NIOCTXSYNC, NULL);
 		}
 		if (pollfd[1].revents & POLLOUT) {
 			move(pa, pb, burst);
-			ioctl(pollfd[0].fd, NIOCTXSYNC, NULL);
+			ioctl(pollfd[1].fd, NIOCTXSYNC, NULL);
 			// XXX we don't need the ioctl */
 			// ioctl(me[1].fd, NIOCTXSYNC, NULL);
 		}
