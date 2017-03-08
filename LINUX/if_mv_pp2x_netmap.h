@@ -277,7 +277,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			mv_pp2x_txq_inc_put(adapter->priv->pp2_version,
 					    txq_pcpu, addr, tx_desc);
 
-			txq_pcpu->count += 1;
 			txq_pcpu->reserved_num -= 1;
 
 			if (++count >= (aggr_txq->size >> 2)) {
@@ -318,7 +317,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	nic_i = netmap_idx_k2n(kring, kring->nr_hwtail);
 	tx_sent = mv_pp2x_txq_sent_desc_proc(adapter,
 				(first_addr_space + txq_pcpu->cpu), txq->id);
-	txq_pcpu->count -= tx_sent;
 
 	if (tx_sent >= kring->nkr_num_slots) {
 		pr_warn("tx_sent: %d, nkr_num_slots: %d\n", tx_sent,
