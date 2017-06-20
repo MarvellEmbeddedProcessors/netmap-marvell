@@ -701,10 +701,16 @@ initialize_packet(struct targ *targ)
 	struct ether_header *eh;
 	struct ip *ip;
 	struct udphdr *udp;
-	uint16_t paylen = targ->g->pkt_size - sizeof(*eh) - sizeof(struct ip);
+	uint16_t paylen;
+	uint16_t hdr_len = sizeof(*eh) + sizeof(struct ip);
 	const char *payload = targ->g->options & OPT_INDIRECT ?
 		indirect_payload : default_payload;
 	int i, l0 = strlen(payload);
+
+	if (targ->g->pkt_size < hdr_len)
+		targ->g->pkt_size = hdr_len;
+
+	paylen = targ->g->pkt_size - hdr_len;
 
 #ifndef NO_PCAP
 	char errbuf[PCAP_ERRBUF_SIZE];
