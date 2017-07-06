@@ -52,6 +52,21 @@ struct mvpp2_ntmp_params {
 
 static struct mvpp2_ntmp_params *ntmp_params;
 
+static void
+mv_pp2x_netmap_intr(struct netmap_adapter *na, int onoff)
+{
+	struct ifnet *ifp = na->ifp;
+	struct SOFTC_T *adapter = netdev_priv(ifp);
+
+	if (likely(onoff && adapter->use_interrupts))
+		return;
+
+	if (onoff)
+		adapter->use_interrupts = true;
+	else
+		adapter->use_interrupts = false;
+}
+
 /*
  * Register/unregister
  *	adapter is pointer to eth_port
@@ -74,6 +89,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	if (!netif_running(adapter->dev))
 		return -EINVAL;
 
+	adapter->use_interrupts = false;
 	mv_pp2x_stop(adapter->dev);
 
 	pr_debug("%s: stopping interface\n", ifp->name);
@@ -477,6 +493,9 @@ mv_pp2x_netmap_rxsync(struct netmap_kring *kring, int flags)
 		kring->nr_hwcur = head;
 		/*mv_pp2x_rxq_status_update(adapter, rxq->id, 0, m)*/;
 	}
+	if (!rx_done && adapter->use_interrupts) {
+		mv_pp2x_qvector_interrupt_enable(&adapter->q_vector[rxq->log_id]);
+	}
 	put_cpu();
 	return 0;
 
@@ -629,6 +648,8 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 	if (!ntmp_params)
 		ntmp_params = kmalloc(sizeof(*ntmp_params), GFP_KERNEL);
 
+	adapter->use_interrupts = false;
+
 	na.ifp = adapter->dev; /* struct net_device */
 	na.num_tx_desc = adapter->tx_ring_size;
 	na.num_rx_desc = adapter->rx_ring_size;
@@ -636,6 +657,7 @@ mv_pp2x_netmap_attach(struct SOFTC_T *adapter)
 	na.nm_config = mv_pp2x_netmap_config;
 	na.nm_txsync = mv_pp2x_netmap_txsync;
 	na.nm_rxsync = mv_pp2x_netmap_rxsync;
+	na.nm_intr = mv_pp2x_netmap_intr;
 	na.num_tx_rings = adapter->num_tx_queues * num_active_cpus();
 	na.num_rx_rings = adapter->num_rx_queues;
 	netmap_attach(&na);
