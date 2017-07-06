@@ -2540,6 +2540,8 @@ flush_tx:
 	 */
 	if (want_rx) {
 		/* two rounds here for race avoidance */
+		if (na->nm_intr)
+			na->nm_intr(na, 1);
 do_retry_rx:
 		for (i = priv->np_qfirst[NR_RX]; i < priv->np_qlast[NR_RX]; i++) {
 			int found = 0;
