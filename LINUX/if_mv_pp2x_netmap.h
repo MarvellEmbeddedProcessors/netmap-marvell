@@ -163,6 +163,12 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 			}
 		}
 
+		for (rxq = 0; rxq < na->num_rx_rings; rxq++) {
+			mv_pp2x_swf_bm_pool_assign(adapter, rxq,
+					adapter->pool_long->id,
+					adapter->pool_short->id);
+		}
+
 		if (--cell_params->active_if < 0) {
 			pr_err("Error in active interfaces\n");
 			return -EINVAL;
@@ -170,12 +176,6 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		if (cell_params->active_if == 0) {
 			pr_info("removig netmap BM pool %d from cell %d\n",
 				cell_params->bm_pool_num, cell_id);
-			for (rxq = 0; rxq < na->num_rx_rings; rxq++) {
-				mv_pp2x_swf_bm_pool_assign(adapter, rxq,
-						adapter->pool_long->id,
-						adapter->pool_short->id);
-			}
-
 			mv_pp2x_bm_pool_destroy(ifp->dev.parent, adapter->priv,
 			   &adapter->priv->bm_pools[cell_params->bm_pool_num]);
 			cell_params->bm_pool_num = 0;
