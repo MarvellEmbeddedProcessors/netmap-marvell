@@ -257,7 +257,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			slot->flags &= ~NS_REPORT;
 
 			/* check aggregated TXQ resource */
-			if (unlikely((aggr_txq->count + 1) > aggr_txq->size)) {
+			if (unlikely((aggr_txq->hw_count + 1) > aggr_txq->size)) {
 				if (mv_pp2x_aggr_desc_num_check(adapter->priv, aggr_txq, 1, cpu))
 					break;
 			}
@@ -298,7 +298,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			if (++count >= (aggr_txq->size >> 2)) {
 				wmb(); /* synchronize writes to the NIC ring */
 				mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-				aggr_txq->count += count;
+				aggr_txq->hw_count += count;
 				count = 0;
 			}
 			tx_bytes += len;
@@ -314,7 +314,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 		if (count > 0) {
 			wmb(); /* synchronize writes to the NIC ring */
 			mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-			aggr_txq->count += count;
+			aggr_txq->hw_count += count;
 		}
 		/* Update tx counters */
 		if (tx_count) {
