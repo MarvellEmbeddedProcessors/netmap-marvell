@@ -205,7 +205,6 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int nic_i = 0; /* Number of sent packets from NIC  */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int count = 0;
 	u_int tx_count = 0, tx_bytes = 0;
 	u_int const head = kring->rhead;
 	struct mv_pp2x_tx_desc *tx_desc;
@@ -240,6 +239,8 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	 * netmap ring, l is the corresponding index in the NIC ring.
 	 */
 
+	/* sw_interrupts (NAPI) must be prevented, due to shared aggr_txq w/kernel that handles other net_devices. */
+	local_bh_disable();
 	if (!netif_carrier_ok(ifp))
 		goto out;
 
@@ -256,11 +257,10 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			NM_CHECK_ADDR_LEN(na, addr, len);
 			slot->flags &= ~NS_REPORT;
 
-			/* check aggregated TXQ resource */
-			if (unlikely((aggr_txq->hw_count + 1) > aggr_txq->size)) {
-				if (mv_pp2x_aggr_desc_num_check(adapter->priv, aggr_txq, 1, cpu))
-					break;
-			}
+			/* check aggregated TXQ resource. Check aggr_q locally to prevent fn_call */
+			if (unlikely(((aggr_txq->sw_count + aggr_txq->hw_count + 1) > aggr_txq->size) &&
+				mv_pp2x_aggr_desc_num_check(adapter->priv, aggr_txq, 1, cpu)))
+				break;
 
 			if (unlikely(txq_pcpu->reserved_num == 0)){
 				txq_pcpu->reserved_num += mv_pp2x_txq_alloc_reserved_desc(adapter->priv,
@@ -295,11 +295,11 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 
 			txq_pcpu->reserved_num -= 1;
 
-			if (++count >= (aggr_txq->size >> 2)) {
+			if (++aggr_txq->sw_count >= (aggr_txq->size >> 2)) {
 				wmb(); /* synchronize writes to the NIC ring */
-				mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-				aggr_txq->hw_count += count;
-				count = 0;
+				mv_pp2x_aggr_txq_pend_desc_add(adapter, aggr_txq->sw_count);
+				aggr_txq->hw_count += aggr_txq->sw_count;
+				aggr_txq->sw_count = 0;
 			}
 			tx_bytes += len;
 			tx_count++;
@@ -311,10 +311,11 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 		}
 
 		/* Enable transmit */
-		if (count > 0) {
+		if (aggr_txq->sw_count > 0) {
 			wmb(); /* synchronize writes to the NIC ring */
-			mv_pp2x_aggr_txq_pend_desc_add(adapter, count);
-			aggr_txq->hw_count += count;
+			mv_pp2x_aggr_txq_pend_desc_add(adapter, aggr_txq->sw_count);
+			aggr_txq->hw_count += aggr_txq->sw_count;
+			aggr_txq->sw_count = 0;
 		}
 		/* Update tx counters */
 		if (tx_count) {
@@ -344,6 +345,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 	kring->nr_hwtail = netmap_idx_n2k(kring, nic_i);
 
 out:
+	local_bh_enable();
 	put_cpu();
 	return 0;
 }
