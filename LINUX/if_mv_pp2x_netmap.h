@@ -81,6 +81,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct SOFTC_T *adapter = netdev_priv(ifp);
 	struct mvpp2_ntmp_cell_params *cell_params;
 	u_int rxq, queue, si, cell_id;
+	int ret = 0;
 
 	if (!na)
 		return -EINVAL;
@@ -111,12 +112,18 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 				adapter->priv, &pool,
 				MVPP2_BM_NETMAP_PKT_SIZE) != 0) {
 				pr_err("Unable to allocate a new pool\n");
-				return -EINVAL;
+				ret = -EINVAL;
+				goto out;
 			}
 			cell_params->bm_pool_num = pool;
 		}
 	} else {
 		u_int i, idx;
+
+		if (cell_params->active_if == 0) {
+			ret = -EINVAL;
+			goto out;
+		}
 
 		pr_info("Netmap stop\n");
 
@@ -169,11 +176,7 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 					adapter->pool_short->id);
 		}
 
-		if (--cell_params->active_if < 0) {
-			pr_err("Error in active interfaces\n");
-			return -EINVAL;
-		}
-		if (cell_params->active_if == 0) {
+		if (--cell_params->active_if == 0) {
 			pr_info("removig netmap BM pool %d from cell %d\n",
 				cell_params->bm_pool_num, cell_id);
 			mv_pp2x_bm_pool_destroy(ifp->dev.parent, adapter->priv,
@@ -184,11 +187,12 @@ mv_pp2x_netmap_reg(struct netmap_adapter *na, int onoff)
 		adapter->flags &= ~MVPP2_F_IFCAP_NETMAP;
 	}
 
+out:
 	if (netif_running(adapter->dev)) {
 		mv_pp2x_open(adapter->dev);
 		pr_debug("%s: starting interface\n", ifp->name);
 	}
-	return 0;
+	return ret;
 }
 
 /*
