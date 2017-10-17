@@ -254,7 +254,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			/* slot is the current slot in the netmap ring */
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
-			u64 paddr;
+			dma_addr_t paddr;
 			void *addr = PNMB(na, slot, &paddr);
 
 			/* device-specific */
@@ -276,7 +276,7 @@ mv_pp2x_netmap_txsync(struct netmap_kring *kring, int flags)
 			tx_desc = mv_pp2x_txq_next_desc_get(aggr_txq);
 			tx_desc->phys_txq = txq->id; /* Destination Queue ID */
 			mv_pp2x_txdesc_phys_addr_set(adapter->priv->pp2_version,
-				(uint32_t)(paddr) & ~MVPP2_TX_DESC_DATA_OFFSET,
+				paddr & ~MVPP2_TX_DESC_DATA_OFFSET,
 				tx_desc);
 			tx_desc->data_size = len;
 			tx_desc->packet_offset = slot->data_offs;
